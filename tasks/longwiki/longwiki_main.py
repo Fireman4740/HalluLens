@@ -25,6 +25,7 @@ try:
     from tasks.longwiki.facthalu import FactHalu
     from utils import exp
     from utils import generate_question as qa
+    from utils import generate_hybrid_prompt as hybrid_qa
 except ModuleNotFoundError:
     # Fallback in case the script is executed from a different CWD
     if str(_repo_root) not in sys.path:
@@ -32,6 +33,7 @@ except ModuleNotFoundError:
     from tasks.longwiki.facthalu import FactHalu
     from utils import exp
     from utils import generate_question as qa
+    from utils import generate_hybrid_prompt as hybrid_qa
 
 TASKNAME = "longwiki"
 
@@ -89,7 +91,7 @@ def run_eval(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exp_mode", type=str, default="", help="longwiki")
+    parser.add_argument("--exp_mode", type=str, default="", help="longwiki or hybrid")
 
     parser.add_argument("--do_generate_prompt", default=False, action="store_true")
     parser.add_argument("--do_inference", default=False, action="store_true")
@@ -149,20 +151,89 @@ if __name__ == "__main__":
         help="Temperature for inference model (0.0 = deterministic, higher = more random)",
     )
     parser.add_argument("--max_workers", type=int, default=64)
+
+    # Hybrid prompt generation arguments
+    parser.add_argument(
+        "--tasks",
+        nargs="+",
+        default=None,
+        help="Task types for hybrid prompts (e.g., INTERVIEW NEWS_ARTICLE)",
+    )
+    parser.add_argument(
+        "--creativity",
+        nargs="+",
+        default=None,
+        help="Creativity levels for hybrid prompts (e.g., FACTUAL HYBRID VERY_CREATIVE)",
+    )
+    parser.add_argument(
+        "--length_words",
+        type=int,
+        default=500,
+        help="Target word count for hybrid prompts",
+    )
+    parser.add_argument(
+        "--low_level",
+        type=int,
+        default=5,
+        help="Minimum h_score_cat for hybrid prompts",
+    )
+    parser.add_argument(
+        "--high_level",
+        type=int,
+        default=10,
+        help="Maximum h_score_cat for hybrid prompts",
+    )
+    parser.add_argument(
+        "--use_lm_studio",
+        action="store_true",
+        help="Use LM Studio instead of OpenRouter",
+    )
+    parser.add_argument(
+        "--lm_studio_url",
+        type=str,
+        default="http://10.10.12.21:1234/v1/chat/completions",
+        help="LM Studio API URL",
+    )
+    parser.add_argument(
+        "--lm_studio_model",
+        type=str,
+        default="openai/gpt-oss-20b",
+        help="LM Studio model name",
+    )
+
     args = parser.parse_args()
+
+    # Set LM Studio environment variables if requested
+    if args.use_lm_studio:
+        os.environ["USE_LM_STUDIO"] = "true"
+        os.environ["LM_STUDIO_URL"] = args.lm_studio_url
+        os.environ["LM_STUDIO_MODEL"] = args.lm_studio_model
+        print(
+            f"Using LM Studio at {args.lm_studio_url} with model {args.lm_studio_model}"
+        )
 
     # save all args details in
     base_path = os.path.dirname(os.path.abspath(__name__))
     model_name = args.model.split("/")[-1]
-    QA_OUTPUT_PATH = f"data/longwiki/save/longwiki_{model_name}.jsonl"
+
+    # Determine output path based on mode
+    if args.exp_mode == "hybrid":
+        QA_OUTPUT_PATH = f"data/longwiki/save/hybrid_{model_name}.jsonl"
+    else:
+        QA_OUTPUT_PATH = f"data/longwiki/save/longwiki_{model_name}.jsonl"
 
     if args.do_generate_prompt:
         if os.path.exists(QA_OUTPUT_PATH):
             print("using existing qa file")
             all_prompts = pd.read_json(QA_OUTPUT_PATH, lines=True)
-            assert len(all_prompts) == args.N
+            if len(all_prompts) >= args.N:
+                all_prompts = all_prompts.head(args.N)
+            else:
+                print(
+                    f"Warning: existing file has {len(all_prompts)} prompts, expected {args.N}"
+                )
         else:
-            if "longwiki" == args.exp_mode:
+            if args.exp_mode == "longwiki":
                 wiki_input_path = (
                     f"{base_path}/data/wiki_data/doc_goodwiki_h_score.jsonl"
                 )
@@ -170,20 +241,49 @@ if __name__ == "__main__":
                 QAs = qa.longform_QA_generation_run_batch(
                     wiki_input_path=f"{base_path}/data/wiki_data/doc_goodwiki_h_score.jsonl",
                     N=args.N,
-                    q_generator=args.q_generator,  # "meta-llama/Meta-Llama-3.1-405B-Instruct",
+                    q_generator=args.q_generator,
                     output_path=QA_OUTPUT_PATH,
                     from_scratch=False,
                 )
                 all_prompts = pd.DataFrame(QAs)
+            elif args.exp_mode == "hybrid":
+                wiki_input_path = (
+                    f"{base_path}/data/wiki_data/doc_goodwiki_h_score.jsonl"
+                )
+                print(f"Generating HYBRID prompts from {wiki_input_path}")
+
+                # Determine which model to use for prompt generation
+                if args.use_lm_studio:
+                    q_generator_model = f"lm-studio/{args.lm_studio_model}"
+                else:
+                    q_generator_model = args.q_generator
+
+                QAs = hybrid_qa.hybrid_prompt_generation_run_batch(
+                    wiki_input_path=wiki_input_path,
+                    N=args.N,
+                    q_generator=q_generator_model,
+                    output_path=QA_OUTPUT_PATH,
+                    from_scratch=False,
+                    low_level=args.low_level,
+                    high_level=args.high_level,
+                    tasks=args.tasks,
+                    creativity_levels=args.creativity,
+                    length_words=args.length_words,
+                )
+                all_prompts = pd.DataFrame(QAs)
+                print(f"Generated {len(all_prompts)} hybrid prompts")
             else:
                 raise NotImplementedError(f"Mode {args.exp_mode} not implemented")
 
     # RUN INFERENCE
     if args.do_inference:
         all_prompts = pd.read_json(QA_OUTPUT_PATH, lines=True)
-        assert len(all_prompts) == args.N
+        if len(all_prompts) < args.N:
+            print(f"Warning: only {len(all_prompts)} prompts available, using all")
+        else:
+            all_prompts = all_prompts.head(args.N)
 
-        print(f"Start Inference for {args.model} ", args.exp_mode, args.N)
+        print(f"Start Inference for {args.model} ", args.exp_mode, len(all_prompts))
 
         exp.run_exp(
             task=f"{TASKNAME}-{args.exp_mode}",

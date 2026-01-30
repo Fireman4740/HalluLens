@@ -137,3 +137,14 @@ bash scripts/task3-2_generatedentities.sh
 
 ## Liscence.
 The majority of HalluLens is licensed under CC-BY-NC, however portions of the project are available under separate license terms: https://github.com/shmsw25/FActScore is licensed under the MIT license; VeriScore is licensed under the Apache 2.0 license.
+
+python tasks/longwiki/longwiki_main.py \
+    --exp_mode hybrid \
+    --do_generate_prompt \
+    --N 200 \
+    --use_lm_studio \
+    --lm_studio_url "http://10.10.12.21:1234/v1/chat/completions" \
+    --lm_studio_model "openai/gpt-oss-20b" \
+    --tasks INTERVIEW STUDY_GUIDE NEWS_ARTICLE LESSON_PLAN PRESS_RELEASE INTERNAL_BRIEFING_MEMO SOCIAL_MEDIA_THREAD \
+    --creativity FACTUAL HYBRID VERY_CREATIVE --length_words 100
+
