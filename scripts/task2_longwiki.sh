@@ -22,6 +22,11 @@ MODELS=(
     # "gpt-4o"
 )
 
+# Inference parameters (can be overridden via environment variables)
+TEMPERATURE="${TEMPERATURE:-0.0}"
+MAX_TOKENS="${MAX_TOKENS:-1024}"
+MAX_WORKERS="${MAX_WORKERS:-64}"
+
 EXP_MODE=longwiki
 for MODEL in "${MODELS[@]}"
 do  
@@ -34,5 +39,8 @@ do
         --inference_method vllm \
         --N 5 \
         --db_path "/private/home/yejinbang/facthalu/data/wiki_data/.cache/enwiki-20230401.db" \
-        --q_generator meta-llama/Llama-3.1-8B-Instruct    #TODO!!
+        --q_generator meta-llama/Llama-3.1-8B-Instruct \
+        --temperature "${TEMPERATURE}" \
+        --max_tokens "${MAX_TOKENS}" \
+        --max_workers "${MAX_WORKERS}"
 done

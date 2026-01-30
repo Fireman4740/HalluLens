@@ -23,6 +23,32 @@ class LongWikiDB(DocDB):
         self.title_db_path = db_path.replace(".db", "-title.db")
         self.title_connection = sqlite3.connect(self.title_db_path, check_same_thread=False)
         self.SPECIAL_SEPARATOR = "####SPECIAL####SEPARATOR####"
+        self._ensure_titles_table()
+
+    def _ensure_titles_table(self):
+        cursor = self.title_connection.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='titles';")
+        has_titles = cursor.fetchone() is not None
+        if not has_titles:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS titles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title_name TEXT NOT NULL
+                );
+                """
+            )
+            # Populate titles from the main documents DB
+            doc_cursor = self.connection.cursor()
+            doc_cursor.execute("SELECT title FROM documents")
+            titles = [r[0] for r in doc_cursor.fetchall()]
+            doc_cursor.close()
+            cursor.executemany(
+                "INSERT INTO titles (title_name) VALUES (?)",
+                [(title,) for title in titles],
+            )
+            self.title_connection.commit()
+        cursor.close()
 
     def get_relevant_titles(self, entity: str):
         cursor = self.title_connection.cursor()

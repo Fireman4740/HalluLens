@@ -3,6 +3,8 @@ development
 data/wikirank/*.txt
 data/wiki_data/*.jsonl
 # data/wiki_data/*.txt
+data/wiki_data/enwiki-2024-h.txt
+data/wiki_data/enwiki-2024.titles.txt
 data/wiki_data/.cache/*
 data/nonexistent_refusal
 scripts/data_download-full.sh
@@ -13,5 +15,5 @@ data/nonsense_all
 data/precise_qa
 
 debug.ipynb
-
+.env
 output/*

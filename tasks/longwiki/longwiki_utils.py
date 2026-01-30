@@ -13,6 +13,13 @@ from tqdm.contrib.concurrent import thread_map
 
 
 def print_all_metrics(final_results_df, k=32):
+    if "prompt" not in final_results_df.columns:
+        if final_results_df.index.name == "prompt":
+            final_results_df = final_results_df.reset_index()
+        else:
+            print("Missing 'prompt' column; skipping metric printing.")
+            return
+
     overall_recall = final_results_df.groupby("prompt").recall.first().mean()
     overall_precision = final_results_df.groupby("prompt").precision.first().mean()
     overall_f1 = final_results_df.groupby("prompt").f1.first().mean()
@@ -27,21 +34,28 @@ def print_all_metrics(final_results_df, k=32):
     print(f"med_n_claims", "%.3f" % med_n_claims)
 
 def calculate_all_metrics(final_results_df, k=32):
-    final_results_df["precision"] = final_results_df.groupby("prompt").is_supported.transform(
-        "mean"
-    )
-    final_results_df["recall"] = final_results_df.groupby("prompt").is_supported.transform(
-        lambda g: min(g.sum() / k, 1)
-    )
-    final_results_df = (
-        final_results_df.groupby("prompt", group_keys=False)
-        .apply(f1_score) #, include_groups=False) # NOTE: python 3.9 < 
-        .reset_index()
-    )
-    final_results_df["k"] = k
-    final_results_df["n_claims"] = final_results_df.groupby("prompt").is_supported.transform(
-        "count"
-    )
+    if "prompt" not in final_results_df.columns:
+        if final_results_df.index.name == "prompt":
+            final_results_df = final_results_df.reset_index()
+        else:
+            print("Missing 'prompt' column; skipping metric calculation.")
+            return final_results_df
+
+    try:
+        grouped = final_results_df.groupby("prompt")
+        precision = grouped.is_supported.mean()
+        recall = grouped.is_supported.apply(lambda g: min(g.sum() / k, 1))
+        f1 = (2 * precision * recall) / (precision + recall)
+        f1 = f1.fillna(0)
+
+        final_results_df["precision"] = final_results_df["prompt"].map(precision)
+        final_results_df["recall"] = final_results_df["prompt"].map(recall)
+        final_results_df["f1"] = final_results_df["prompt"].map(f1)
+        final_results_df["k"] = k
+        final_results_df["n_claims"] = grouped.is_supported.transform("count")
+    except KeyError:
+        print("Missing 'prompt' column during metric calculation; skipping.")
+        return final_results_df
 
     overall_recall = final_results_df.groupby("prompt").recall.first().mean()
     overall_precision = final_results_df.groupby("prompt").precision.first().mean()
@@ -114,7 +128,7 @@ def model_eval_step(evaluator, prompts, max_token=512, batch_size=16, max_worker
             lambda p: lm.generate(p, evaluator, i=api_i),
             prompts,
             max_workers=max_workers,
-            desc=f"using vllm {evaluator}")
+        desc=f"using OpenRouter {evaluator}")
     return eval_raw_res
 
 def jsonify_ans(raw_responses, eval_prompts, evaluator, key):

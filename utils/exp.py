@@ -10,6 +10,7 @@ from tqdm.contrib.concurrent import thread_map
 
 from utils import lm
 
+
 def run_exp(
     task: str,
     model_path: str,
@@ -19,8 +20,9 @@ def run_exp(
     inference_method="vllm",
     max_workers=64,
     max_tokens=512,
-    return_gen = False
-):  
+    temperature=0.0,
+    return_gen=False,
+):
     if not generations_file_path:
         base_path = Path(base_path)
         model_name = model_path.split("/")[-1]
@@ -29,35 +31,23 @@ def run_exp(
         generations_file_path = output_folder / "generation.jsonl"
 
     generations_file_path = str(generations_file_path)
-    print('generations_file_path', generations_file_path)
+    print("generations_file_path", generations_file_path)
 
-    prompts =  all_prompts.prompt.to_list()
+    prompts = all_prompts.prompt.to_list()
 
-    # get the response from the model
-    if inference_method == 'openai':
-        all_prompts["generation"] = thread_map(
-            lambda p: lm.openai_generate(p, model=model_path, temperature=0.0, top_p=1.0, max_tokens=max_tokens),
-            prompts,
-            max_workers=max_workers,
-            desc="Predict openai",
-        )
-    elif inference_method == "vllm":
-        port = None
-        all_prompts["generation"] = thread_map(
-            lambda p: lm.call_vllm_api(p, model=model_path, temperature=0.0, top_p=1.0,  max_tokens=max_tokens, port=port),
-            prompts,
-            max_workers=max_workers,
-            desc="Predict on vllm",
-        )
-    elif inference_method == "custom":
-        all_prompts["generation"] = thread_map(
-            lambda p: lm.generate(p, model=model_path, temperature=0.0, top_p=1.0, max_tokens=max_tokens ),
-            prompts,
-            max_workers=max_workers,
-            desc="Predict on custom API",
-        )
-    else:
-        raise NotImplementedError(f"No method {inference_method}")
+    # Always use OpenRouter for LLM generation
+    all_prompts["generation"] = thread_map(
+        lambda p: lm.generate(
+            p,
+            model=model_path,
+            temperature=temperature,
+            top_p=1.0,
+            max_tokens=max_tokens,
+        ),
+        prompts,
+        max_workers=max_workers,
+        desc="Predict on OpenRouter",
+    )
 
     # save the results
     all_prompts.to_json(generations_file_path, lines=True, orient="records")
