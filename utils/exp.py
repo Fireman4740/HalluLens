@@ -35,7 +35,7 @@ def run_exp(
 
     prompts = all_prompts.prompt.to_list()
 
-    # Always use OpenRouter for LLM generation
+    # Use lm.generate (OpenRouter or LM Studio) for LLM generation
     all_prompts["generation"] = thread_map(
         lambda p: lm.generate(
             p,
@@ -46,7 +46,7 @@ def run_exp(
         ),
         prompts,
         max_workers=max_workers,
-        desc="Predict on OpenRouter",
+        desc="Predict on LLM",
     )
 
     # save the results

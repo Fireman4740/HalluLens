@@ -6,7 +6,6 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
-import openai
 
 """
 NOTE: 
@@ -18,7 +17,6 @@ NOTE:
         - openai_generate: using openai models (routes to custom_api)
 """
 ########################################################################################################
-import os
 import requests
 from dotenv import load_dotenv
 
@@ -39,7 +37,12 @@ OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")  # e
 
 
 def lm_studio_api(
-    prompt, model=None, temperature=0.0, max_tokens=1024, top_p=1.0, **kwargs
+    prompt,
+    model=None,
+    temperature=0.0,
+    max_tokens=1024,
+    top_p=1.0,
+    **kwargs,
 ):
     """
     Call LM Studio local API.
@@ -105,11 +108,7 @@ def custom_api(prompt, model, temperature=0.0, max_tokens=1024, top_p=1.0, **kwa
             model.replace("lm-studio/", "") if model.startswith("lm-studio/") else None
         )
         return lm_studio_api(
-            prompt,
-            model=actual_model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
+            prompt, model=actual_model, temperature=temperature, max_tokens=max_tokens, top_p=top_p
         )
 
     url = "https://openrouter.ai/api/v1/chat/completions"

@@ -104,6 +104,9 @@ class GenerationConfig:
     max_ref_tokens: int = 650
     blueprint_temperature: float = 0.7
     naturalize_temperature: float = 0.7
+    # If True, skip LLM naturalization and render a deterministic prompt template
+    # that only varies by task/subject/creativity_level/length_words.
+    static_user_prompt: bool = False
     top_p: float = 0.9
     max_retries: int = 3
     max_workers: int = 50
@@ -220,30 +223,7 @@ TASK_CONSTRAINTS: Dict[TaskName, str] = {
         "- Include exactly 2 short direct quotes in double quotes (attributed to named sources).\n"
         "- End with 1 forward-looking perspective sentence.\n"
     ),
-    TaskName.MUSEUM_AUDIO_GUIDE: (
-        "Use-case: audio guide for museum visitors (~2 minutes per stop).\n"
-        "Format requirements:\n"
-        "- Exactly 4 stops labeled Stop 1 to Stop 4.\n"
-        "- Each stop: 90-140 words.\n"
-        "- Include one subtle sound cue per stop in brackets [like this].\n"
-        "- Conversational but informative tone.\n"
-    ),
-    TaskName.PODCAST_SCRIPT: (
-        "Use-case: short podcast segment with a host and a guest expert.\n"
-        "Format requirements:\n"
-        "- 5 segments with timestamps: [00:00], [01:00], [02:00], [03:00], [04:00].\n"
-        "- Two voices: HOST and GUEST (each segment must include both).\n"
-        "- Natural dialogue with back-and-forth.\n"
-        "- End with a one-sentence call to action.\n"
-    ),
-    TaskName.MEETING_MINUTES: (
-        "Use-case: internal minutes with clear takeaways for a project team.\n"
-        "Format requirements:\n"
-        "- Sections: Attendees, Agenda, Discussion Notes, Decisions, Action Items.\n"
-        "- Exactly 5 action items.\n"
-        "- Each action item includes 'Owner: ___, Due: ___'.\n"
-        "- Professional, concise tone.\n"
-    ),
+
     TaskName.FAQ_HELP_PAGE: (
         "Use-case: help/FAQ page for a public-facing educational site.\n"
         "Format requirements:\n"
@@ -262,21 +242,13 @@ TASK_CONSTRAINTS: Dict[TaskName, str] = {
         "- Answer key at the end.\n"
     ),
     TaskName.LESSON_PLAN: (
-        "Use-case: teacher lesson plan for a 45-minute class.\n"
+        "Use-case: teacher lesson plan for a class.\n"
         "Format requirements:\n"
         "- Grade level specified at top.\n"
         "- Learning objectives: exactly 3.\n"
         "- Materials needed: list format.\n"
-        "- 4 activities with time allocations totaling 45 minutes.\n"
+        "- 1 activity with time allocations.\n"
         "- Assessment criteria section.\n"
-    ),
-    TaskName.DOCUMENTARY_VOICEOVER: (
-        "Use-case: narration script for a short documentary segment.\n"
-        "Format requirements:\n"
-        "- 5 scenes labeled SCENE 1 to SCENE 5.\n"
-        "- Each scene: 60-100 words of narration.\n"
-        "- Visual cues in [brackets] for each scene.\n"
-        "- End with a contemplative closing line.\n"
     ),
     TaskName.PRESS_RELEASE: (
         "Use-case: official press release announcement.\n"
@@ -288,15 +260,7 @@ TASK_CONSTRAINTS: Dict[TaskName, str] = {
         "- Boilerplate 'About' section at end.\n"
         "- Contact information placeholder.\n"
     ),
-    TaskName.INTERNAL_BRIEFING_MEMO: (
-        "Use-case: briefing memo for a busy executive.\n"
-        "Format requirements:\n"
-        "- Header: Subject, Prepared for, Date.\n"
-        "- TL;DR: exactly 3 bullets (one sentence each).\n"
-        "- Key Facts: exactly 8 bullets.\n"
-        "- Risks / Unknowns: exactly 3 bullets.\n"
-        "- Talking Points: exactly 5 bullets.\n"
-    ),
+
     TaskName.SOCIAL_MEDIA_THREAD: (
         "Use-case: social media educational thread, punchy and mobile-friendly.\n"
         "Format requirements:\n"
@@ -314,31 +278,6 @@ TASK_CONSTRAINTS: Dict[TaskName, str] = {
         "- CON arguments: exactly 4 numbered points with evidence.\n"
         "- Key statistics: exactly 3 (can be approximate/illustrative).\n"
         "- Anticipated rebuttals: exactly 3.\n"
-    ),
-    TaskName.TOUR_BROCHURE: (
-        "Use-case: tourist brochure for a destination or historical site.\n"
-        "Format requirements:\n"
-        "- Catchy title.\n"
-        "- 'At a Glance' box with 5 quick facts.\n"
-        "- 3 highlighted attractions with 2-3 sentence descriptions each.\n"
-        "- 'Don't Miss' callout box.\n"
-        "- Practical info section (hours, tips).\n"
-    ),
-    TaskName.ENCYCLOPEDIA_ENTRY: (
-        "Use-case: short encyclopedia-style entry for a reference booklet.\n"
-        "Format requirements:\n"
-        "- Lead paragraph: exactly 3 sentences.\n"
-        "- Sections: Overview, Historical Context, Notable Aspects, Legacy.\n"
-        "- Each section: 3-5 bullet points.\n"
-        "- 'See Also' or 'Further Reading': exactly 3 items (no URLs).\n"
-    ),
-    TaskName.TIMELINE_PANEL: (
-        "Use-case: exhibit wall timeline panel for a museum or educational display.\n"
-        "Format requirements:\n"
-        "- Title.\n"
-        "- Timeline: exactly 8 entries formatted 'YEAR - Event description'.\n"
-        "- 'Why It Matters' section: exactly 3 bullets.\n"
-        "- Brief intro paragraph (2-3 sentences).\n"
     ),
 }
 
@@ -409,34 +348,54 @@ Return STRICT JSON (no markdown, no explanation) with this exact structure:
 """.strip()
 
 
-NATURALIZE_PROMPT: str = """You transform structured blueprints into natural user prompts.
+NATURALIZE_PROMPT: str = """You generate standardized user prompts for a benchmark.
 
-Write ONE natural user request in English about: "{subject}"
+The prompt MUST keep the same overall form across examples.
+Only these parameters should vary:
+- SUBJECT: "{subject}"
+- TASK: {task_name}
+- CREATIVITY_LEVEL: {creativity_level}
+- LENGTH_WORDS: {length_words}
 
-Use this blueprint to shape the prompt (but do NOT expose the blueprint structure):
-{blueprint_json}
+Write ONE user message in English using the exact structure below.
+Do NOT add extra backstory, names, dates, locations, or personal context.
 
-TASK REQUIREMENTS (must be clearly stated in the prompt):
+USER MESSAGE TEMPLATE (keep section headers and ordering identical):
+Task: {task_name}
+Subject: {subject}
+CreativityLevel: {creativity_level}
+
+Requirements:
 {task_constraints}
 
-STYLE GUIDE:
-{creativity_style}
-
-LENGTH REQUIREMENT:
+Length:
 {length_block}
 
-HARD RULES:
-1. Output must be a single user message (no assistant reply, no system text).
-2. Do NOT mention Wikipedia, sources, benchmarking, evaluation, RAG, or "closed-book".
-3. Do NOT say "as an AI", "language model", or similar meta-references.
-4. Do NOT include or reference the blueprint excerpt.
-5. Make it sound like something a real person would paste into ChatGPT.
-6. The task format requirements MUST be clearly stated (numbers, structure, etc.).
+Style:
+{creativity_style}
+
+Please follow the requirements exactly.
 
 {schema}
 
 Return ONLY valid JSON, no other text.
 """
+
+
+STATIC_USER_PROMPT_TEMPLATE: str = """Task: {task_name}
+Subject: {subject}
+CreativityLevel: {creativity_level}
+
+Requirements:
+{task_constraints}
+
+Length:
+{length_block}
+
+Style:
+{creativity_style}
+
+Please follow the requirements exactly."""
 
 
 # ==============================================================================
@@ -484,3 +443,20 @@ def validate_creativity_level(level: str) -> Optional[CreativityLevel]:
         return CreativityLevel(level.upper())
     except ValueError:
         return None
+
+
+def render_final_user_message(spec: PromptSpec) -> str:
+    """
+    Render a deterministic final user prompt.
+
+    Used when GenerationConfig.static_user_prompt=True so the output prompt keeps the
+    same shape and only varies by Task/subject/CreativityLevel/length_words.
+    """
+    return STATIC_USER_PROMPT_TEMPLATE.format(
+        task_name=spec.task.value,
+        subject=spec.subject,
+        creativity_level=spec.creativity_level.value,
+        task_constraints=TASK_CONSTRAINTS[spec.task].strip(),
+        length_block=LENGTH_BLOCK.format(length_words=spec.length_words),
+        creativity_style=CREATIVITY_STYLE[spec.creativity_level].strip(),
+    )

@@ -72,6 +72,7 @@ from utils.prompt_lego_blocks import (
     BLUEPRINT_PROMPT,
     FINAL_PROMPT_SCHEMA_DESC,
     NATURALIZE_PROMPT,
+    render_final_user_message,
     check_banned_phrases,
 )
 
@@ -94,10 +95,12 @@ def make_naturalize_prompt(spec: PromptSpec, blueprint: dict) -> str:
     """Assemble the naturalization prompt with all lego blocks."""
     return NATURALIZE_PROMPT.format(
         subject=spec.subject,
-        blueprint_json=json.dumps(blueprint, ensure_ascii=False, indent=2),
+        task_name=spec.task.value,
+        creativity_level=spec.creativity_level.value,
+        length_words=spec.length_words,
         task_constraints=TASK_CONSTRAINTS[spec.task].strip(),
-        creativity_style=CREATIVITY_STYLE[spec.creativity_level].strip(),
         length_block=LENGTH_BLOCK.format(length_words=spec.length_words),
+        creativity_style=CREATIVITY_STYLE[spec.creativity_level].strip(),
         schema=FINAL_PROMPT_SCHEMA_DESC,
     )
 
@@ -414,11 +417,41 @@ class HybridPromptGenerator:
     ) -> Optional[GeneratedPrompt]:
         """Generate a single hybrid prompt."""
         # Check cache
-        cache_key = f"{spec.subject}:{spec.task.value}:{spec.creativity_level.value}:{spec.length_words}"
+        cache_key = (
+            f"{spec.subject}:{spec.task.value}:{spec.creativity_level.value}:"
+            f"{spec.length_words}:static={self.config.static_user_prompt}"
+        )
         if self.cache:
             cached = self.cache.get_item(cache_key)
             if cached:
                 return GeneratedPrompt(**cached)
+
+        # Deterministic mode: skip LLM blueprint + naturalize and just render a fixed template.
+        if self.config.static_user_prompt:
+            user_prompt = render_final_user_message(spec)
+            output = GeneratedPrompt(
+                id=str(uuid.uuid4()),
+                user_prompt=user_prompt,
+                reference_excerpt=reference,
+                metadata={
+                    "subject": spec.subject,
+                    "task": spec.task.value,
+                    "creativity_level": spec.creativity_level.value,
+                    "length_words": spec.length_words,
+                    "blueprint": {},
+                    **(wiki_metadata or {}),
+                },
+                quality_checks={
+                    "mentions_wikipedia": False,
+                    "has_measurable_constraints": True,
+                    "includes_subject": True,
+                    "natural_sounding": True,
+                },
+            )
+
+            if self.cache:
+                self.cache.set_item(cache_key, output.to_dict())
+            return output
 
         # Generate blueprint
         blueprint = self.generate_blueprint(spec.subject, reference)
@@ -617,6 +650,7 @@ def hybrid_prompt_generation_run_batch(
     tasks: Optional[List[str]] = None,
     creativity_levels: Optional[List[str]] = None,
     length_words: int = 500,
+    static_user_prompt: bool = False,
     lm_studio_url: Optional[str] = None,
     lm_studio_model: Optional[str] = None,
 ) -> List[dict]:
@@ -650,6 +684,7 @@ def hybrid_prompt_generation_run_batch(
     config = GenerationConfig(
         prompt_writer_model=q_generator,
         max_workers=1,  # Sequential for stability
+        static_user_prompt=static_user_prompt,
         cache_path=str(Path(output_path).parent / ".hybrid_cache.db")
         if output_path
         else None,
@@ -791,6 +826,11 @@ if __name__ == "__main__":
         help="Creativity levels (e.g., FACTUAL HYBRID VERY_CREATIVE)",
     )
     parser.add_argument("--length", type=int, default=500, help="Target word count")
+    parser.add_argument(
+        "--static_user_prompt",
+        action="store_true",
+        help="Skip LLM naturalization and output a deterministic prompt template",
+    )
     parser.add_argument("--low_level", type=int, default=5, help="Minimum h_score_cat")
     parser.add_argument(
         "--high_level", type=int, default=10, help="Maximum h_score_cat"
@@ -821,6 +861,7 @@ if __name__ == "__main__":
         tasks=args.tasks,
         creativity_levels=args.creativity,
         length_words=args.length,
+        static_user_prompt=args.static_user_prompt,
         lm_studio_url=args.lm_studio_url,
         lm_studio_model=args.lm_studio_model,
     )

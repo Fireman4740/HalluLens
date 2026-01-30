@@ -89,6 +89,60 @@ def run_eval(args):
     facthalu.run()
 
 
+def save_run_config(args, qa_output_path: str):
+    model_name = args.model.split("/")[-1]
+    output_folder = Path(f"output/{TASKNAME}-{args.exp_mode}/{model_name}")
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+    env_vars = {
+        "OPENROUTER_API_KEY": "set" if openrouter_api_key else None,
+        "OPENROUTER_HTTP_REFERER": os.getenv("OPENROUTER_HTTP_REFERER"),
+        "OPENROUTER_APP_TITLE": os.getenv("OPENROUTER_APP_TITLE"),
+        "OPENROUTER_MODEL": os.getenv("OPENROUTER_MODEL"),
+        "USE_LM_STUDIO": os.getenv("USE_LM_STUDIO"),
+        "LM_STUDIO_URL": os.getenv("LM_STUDIO_URL"),
+        "LM_STUDIO_MODEL": os.getenv("LM_STUDIO_MODEL"),
+        "EXP_MODE": os.getenv("EXP_MODE"),
+        "N": os.getenv("N"),
+        "DB_PATH": os.getenv("DB_PATH"),
+        "MODEL_RESPONSE": os.getenv("MODEL_RESPONSE"),
+        "MODEL_PROMPT": os.getenv("MODEL_PROMPT"),
+        "MODEL_EVAL": os.getenv("MODEL_EVAL"),
+        "ABSTAIN_EVALUATOR": os.getenv("ABSTAIN_EVALUATOR"),
+        "CLAIM_EXTRACTOR": os.getenv("CLAIM_EXTRACTOR"),
+        "VERIFIER": os.getenv("VERIFIER"),
+        "INFERENCE_METHOD": os.getenv("INFERENCE_METHOD"),
+        "TEMPERATURE": os.getenv("TEMPERATURE"),
+        "MAX_TOKENS": os.getenv("MAX_TOKENS"),
+        "MAX_WORKERS": os.getenv("MAX_WORKERS"),
+        "TASKS": os.getenv("TASKS"),
+        "CREATIVITY": os.getenv("CREATIVITY"),
+        "LENGTH_WORDS": os.getenv("LENGTH_WORDS"),
+        "LOW_LEVEL": os.getenv("LOW_LEVEL"),
+        "HIGH_LEVEL": os.getenv("HIGH_LEVEL"),
+        "STATIC_USER_PROMPT": os.getenv("STATIC_USER_PROMPT"),
+        "K": os.getenv("K"),
+        "EVAL_CACHE_PATH": os.getenv("EVAL_CACHE_PATH"),
+    }
+
+    config = {
+        "timestamp": str(pd.Timestamp.now()),
+        "task": TASKNAME,
+        "exp_mode": args.exp_mode,
+        "model_name": model_name,
+        "qa_output_path": qa_output_path,
+        "args": vars(args),
+        "env": env_vars,
+    }
+
+    with open(output_folder / "run_config.json", "w") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+
+    with open(output_folder / "run_history.jsonl", "a") as f:
+        f.write(json.dumps(config, ensure_ascii=False) + "\n")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--exp_mode", type=str, default="", help="longwiki or hybrid")
@@ -151,7 +205,6 @@ if __name__ == "__main__":
         help="Temperature for inference model (0.0 = deterministic, higher = more random)",
     )
     parser.add_argument("--max_workers", type=int, default=64)
-
     # Hybrid prompt generation arguments
     parser.add_argument(
         "--tasks",
@@ -170,6 +223,11 @@ if __name__ == "__main__":
         type=int,
         default=500,
         help="Target word count for hybrid prompts",
+    )
+    parser.add_argument(
+        "--static_user_prompt",
+        action="store_true",
+        help="Use deterministic prompt template for hybrid prompt generation",
     )
     parser.add_argument(
         "--low_level",
@@ -222,6 +280,8 @@ if __name__ == "__main__":
     else:
         QA_OUTPUT_PATH = f"data/longwiki/save/longwiki_{model_name}.jsonl"
 
+    save_run_config(args, QA_OUTPUT_PATH)
+
     if args.do_generate_prompt:
         if os.path.exists(QA_OUTPUT_PATH):
             print("using existing qa file")
@@ -269,6 +329,7 @@ if __name__ == "__main__":
                     tasks=args.tasks,
                     creativity_levels=args.creativity,
                     length_words=args.length_words,
+                    static_user_prompt=args.static_user_prompt,
                 )
                 all_prompts = pd.DataFrame(QAs)
                 print(f"Generated {len(all_prompts)} hybrid prompts")
