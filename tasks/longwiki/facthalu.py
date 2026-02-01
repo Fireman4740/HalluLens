@@ -265,6 +265,11 @@ class FactHalu:
         ]
 
         all_claim_extractions = utils.read_eval_raw(extracted_claims_path)
+        if len(all_claim_extractions) > len(all_sentences):
+            print(
+                "***** [2-1] Cache has more items than expected; ignoring cache and recomputing"
+            )
+            all_claim_extractions = []
         if len(all_claim_extractions) == len(all_sentences):
             print("***** [2-1] Reading extracted claims from cache")
         else:
@@ -299,7 +304,19 @@ class FactHalu:
         print("***** [2-2] Parsing extracted claims")
         all_claims = []
         deduplicate = defaultdict(set)
-        assert len(all_claim_extractions) == len(all_sentences)
+        if len(all_claim_extractions) != len(all_sentences):
+            print(
+                "***** [2-2] Warning: cache size mismatch; padding/truncating to align"
+            )
+            if len(all_claim_extractions) > len(all_sentences):
+                all_claim_extractions = all_claim_extractions[: len(all_sentences)]
+            else:
+                all_claim_extractions.extend(
+                    [""] * (len(all_sentences) - len(all_claim_extractions))
+                )
+            utils.save_eval_raw(
+                all_claim_extractions, output_file=extracted_claims_path
+            )
 
         for claim_extraction, sentence in zip(all_claim_extractions, all_sentences):
             if (

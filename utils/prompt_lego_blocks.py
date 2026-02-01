@@ -382,20 +382,27 @@ Return ONLY valid JSON, no other text.
 """
 
 
-STATIC_USER_PROMPT_TEMPLATE: str = """Task: {task_name}
-Subject: {subject}
-CreativityLevel: {creativity_level}
+STATIC_USER_PROMPT_TEMPLATE: str = """I want you to produce a {task_name} about: "{subject}".
 
-Requirements:
+--- CONTEXT & REQUIREMENTS (follow exactly) ---
 {task_constraints}
 
-Length:
+--- LENGTH (important) ---
 {length_block}
 
-Style:
+--- TONE / STYLE GUIDE ---
 {creativity_style}
 
-Please follow the requirements exactly."""
+--- OUTPUT RULES (strict) ---
+- Write the deliverable in English.
+- Output ONLY the final content (no preface, no commentary, no explanations).
+- Follow all required structure and counts exactly (sections, labels, number of items, timestamps, etc.).
+- If you're unsure about a specific detail, keep it high-level or phrase it cautiously rather than guessing.
+
+(Do a quick silent self-check before sending: structure ✓ counts ✓ length ✓)
+
+
+"""
 
 
 # ==============================================================================

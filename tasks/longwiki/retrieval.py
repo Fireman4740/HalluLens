@@ -18,6 +18,7 @@ import os
 import sqlite3
 import numpy as np
 import pickle as pkl
+import torch
 
 # from rank_bm25 import BM25Okapi
 
@@ -138,8 +139,8 @@ class Retrieval(object):
 
     def load_encoder(self):
         from sentence_transformers import SentenceTransformer
-        encoder = SentenceTransformer("sentence-transformers/" + self.retrieval_type)
-        encoder = encoder.cuda()
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        encoder = SentenceTransformer("sentence-transformers/" + self.retrieval_type, device=device)
         encoder = encoder.eval()
         self.encoder = encoder
         assert self.batch_size is not None
@@ -210,5 +211,4 @@ class Retrieval(object):
 
         
         
-
 

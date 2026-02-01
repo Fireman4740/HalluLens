@@ -6,6 +6,8 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
+import time
+import random
 
 """
 NOTE: 
@@ -34,6 +36,66 @@ USE_LM_STUDIO = os.getenv("USE_LM_STUDIO", "false").lower() in ("true", "1", "ye
 if not OPENROUTER_API_KEY and not USE_LM_STUDIO:
     print("Warning: OPENROUTER_API_KEY not found in environment or .env file.")
 OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")  # exemple
+
+
+def _get_retry_after_seconds(response):
+    retry_after = response.headers.get("Retry-After")
+    if not retry_after:
+        return None
+    try:
+        return float(retry_after)
+    except ValueError:
+        return None
+
+
+def _post_with_retry(
+    url,
+    headers,
+    payload,
+    timeout,
+    max_retries=5,
+    base_sleep=1.0,
+    max_sleep=30.0,
+):
+    for attempt in range(max_retries + 1):
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+
+            if r.status_code == 429:
+                if attempt >= max_retries:
+                    r.raise_for_status()
+                retry_after = _get_retry_after_seconds(r)
+                sleep_s = retry_after if retry_after is not None else base_sleep * (2**attempt)
+                sleep_s = min(max_sleep, sleep_s) + random.uniform(0, 0.5)
+                time.sleep(sleep_s)
+                continue
+
+            if r.status_code in (408, 500, 502, 503, 504):
+                if attempt >= max_retries:
+                    r.raise_for_status()
+                sleep_s = min(max_sleep, base_sleep * (2**attempt)) + random.uniform(0, 0.5)
+                time.sleep(sleep_s)
+                continue
+
+            r.raise_for_status()
+            return r
+        except requests.exceptions.RequestException:
+            if attempt >= max_retries:
+                raise
+            sleep_s = min(max_sleep, base_sleep * (2**attempt)) + random.uniform(0, 0.5)
+            time.sleep(sleep_s)
+
+
+def _extract_content(data):
+    if not isinstance(data, dict):
+        return ""
+    if data.get("error"):
+        return ""
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    message = choices[0].get("message") or {}
+    return (message.get("content") or "").strip()
 
 
 def lm_studio_api(
@@ -128,10 +190,35 @@ def custom_api(prompt, model, temperature=0.0, max_tokens=1024, top_p=1.0, **kwa
         "max_tokens": max_tokens,
     }
 
-    r = requests.post(url, headers=headers, json=payload, timeout=180)
-    r.raise_for_status()
-    data = r.json()
-    return data["choices"][0]["message"]["content"]
+    max_retries = int(os.getenv("OPENROUTER_MAX_RETRIES", "5"))
+    base_sleep = float(os.getenv("OPENROUTER_RETRY_BASE_SECONDS", "1.0"))
+    max_sleep = float(os.getenv("OPENROUTER_RETRY_MAX_SECONDS", "30.0"))
+    for attempt in range(max_retries + 1):
+        try:
+            r = _post_with_retry(
+                url,
+                headers=headers,
+                payload=payload,
+                timeout=180,
+                max_retries=0,
+                base_sleep=base_sleep,
+                max_sleep=max_sleep,
+            )
+        except requests.exceptions.RequestException as e:
+            if attempt >= max_retries:
+                raise
+            sleep_s = min(max_sleep, base_sleep * (2**attempt)) + random.uniform(0, 0.5)
+            time.sleep(sleep_s)
+            continue
+
+        data = r.json()
+        content = _extract_content(data)
+        if content:
+            return content
+        if attempt >= max_retries:
+            raise ValueError("OpenRouter returned empty response content")
+        sleep_s = min(max_sleep, base_sleep * (2**attempt)) + random.uniform(0, 0.5)
+        time.sleep(sleep_s)
 
 
 def generate(prompt, model, temperature=0.0, top_p=1.0, max_tokens=512, port=None, i=0):

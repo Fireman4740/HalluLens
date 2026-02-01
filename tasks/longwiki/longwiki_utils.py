@@ -7,6 +7,8 @@
 
 import os
 import json
+import time
+import numpy as np
 from utils import lm
 from typing import List
 from tqdm.contrib.concurrent import thread_map
@@ -45,8 +47,8 @@ def calculate_all_metrics(final_results_df, k=32):
         grouped = final_results_df.groupby("prompt")
         precision = grouped.is_supported.mean()
         recall = grouped.is_supported.apply(lambda g: min(g.sum() / k, 1))
-        f1 = (2 * precision * recall) / (precision + recall)
-        f1 = f1.fillna(0)
+        denom = precision + recall
+        f1 = (2 * precision * recall).div(denom.replace(0, np.nan)).fillna(0)
 
         final_results_df["precision"] = final_results_df["prompt"].map(precision)
         final_results_df["recall"] = final_results_df["prompt"].map(recall)
@@ -124,22 +126,48 @@ def read_eval_raw(eval_raw_file):
     return eval_raw_res
     
 def model_eval_step(evaluator, prompts, max_token=512, batch_size=16, max_workers=16, api_i=0):
+    max_retries = int(os.getenv("EVAL_EMPTY_RETRIES", "3"))
+    base_sleep = float(os.getenv("EVAL_RETRY_BASE_SECONDS", "1.0"))
+
+    def _safe_generate(p):
+        for attempt in range(max_retries + 1):
+            try:
+                return lm.generate(p, evaluator, i=api_i)
+            except Exception as e:
+                if attempt >= max_retries:
+                    print(f"Eval request failed after retries: {e}")
+                    return ""
+                sleep_s = min(30.0, base_sleep * (2**attempt))
+                time.sleep(sleep_s)
+
     eval_raw_res = thread_map(
-            lambda p: lm.generate(p, evaluator, i=api_i),
-            prompts,
-            max_workers=max_workers,
-        desc=f"using OpenRouter {evaluator}")
+        _safe_generate,
+        prompts,
+        max_workers=max_workers,
+        desc=f"using OpenRouter {evaluator}",
+    )
     return eval_raw_res
 
 def jsonify_ans(raw_responses, eval_prompts, evaluator, key):
 
     def check_validity(gen):
+        if not gen:
+            return -1
         if '{{"{}":false}}'.format(key) in gen.lower():
             return '{{"{}":false}}'.format(key)
         elif '{{"{}":true}}'.format(key) in gen.lower():
             return '{{"{}":true}}'.format(key)
         else:
             return -1
+
+    def extract_json_candidate(text):
+        if not text:
+            return None
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        return text[start : end + 1]
         
     jsonifyed_res  = []
     for r, p in zip(raw_responses, eval_prompts):
@@ -148,36 +176,51 @@ def jsonify_ans(raw_responses, eval_prompts, evaluator, key):
             jsonifyed_res.append(json.loads(check_validity(r)))
             continue
         else:
-            r = r.split("\n")[0]
+            r = (r or "").split("\n")[0]
             try:
-                jsonifyed_res.append(json.loads(r))
-            except:
+                json_candidate = extract_json_candidate(r)
+                jsonifyed_res.append(json.loads(json_candidate or r))
+            except Exception:
                 print(f"Error in eval_answer: {r}")
-                error = True
                 error_count = 0
-                
-                while error:
-                    re_eval = lm.api_generate(p, evaluator)
-
-                    try: 
+                while True:
+                    try:
+                        re_eval = lm.generate(
+                            p,
+                            evaluator,
+                            temperature=0.0,
+                            top_p=1.0,
+                            max_tokens=128,
+                        )
+                    except Exception as e:
+                        print(f"\n** RETRY ERROR: {e}")
+                        error_count += 1
+                        if error_count > 3:
+                            print("Error count exceeded 3. Skipping this prompt.")
+                            jsonifyed_res.append(
+                                {"error": "Error count exceeded 3. Skipping this prompt."}
+                            )
+                            break
+                        continue
+                    try:
                         print("\n** RETRY:", re_eval)
                         if check_validity(re_eval) != -1:
                             json_res = json.loads(check_validity(re_eval))
                         else:
-                            re_eval = re_eval.split("\n")[0]
-                            json_res = json.loads(re_eval)
-                        error = False
-                        
-                    except:
-                        print("*** trying again** \n")
-                        error = True
-                    error_count += 1
-
-                    if error_count > 3:
-                        print("Error count exceeded 3. Skipping this prompt.")
-                        jsonifyed_res.append({"error": "Error count exceeded 3. Skipping this prompt."})
+                            re_eval = (re_eval or "").split("\n")[0]
+                            json_candidate = extract_json_candidate(re_eval)
+                            json_res = json.loads(json_candidate or re_eval)
+                        jsonifyed_res.append(json_res)
+                        print("<<< PASS >>>")
                         break
-                jsonifyed_res.append(json_res)
-                print("<<< PASS >>>")
+                    except Exception:
+                        print("*** trying again** \n")
+                        error_count += 1
+                        if error_count > 3:
+                            print("Error count exceeded 3. Skipping this prompt.")
+                            jsonifyed_res.append(
+                                {"error": "Error count exceeded 3. Skipping this prompt."}
+                            )
+                            break
 
     return jsonifyed_res

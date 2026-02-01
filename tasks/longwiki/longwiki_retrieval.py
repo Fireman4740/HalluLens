@@ -10,6 +10,7 @@ import os
 import sqlite3
 import numpy as np
 import pickle as pkl
+import torch
 from typing import List
 
 from utils.cache import Cache
@@ -80,9 +81,20 @@ class LongWikiRetrieval(object):
         self.retrieval_type = retrieval_type
         self.batch_size = batch_size
 
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        pipeline_device = 0 if device == "cuda" else -1
+
         ner_tokenizer = AutoTokenizer.from_pretrained("dslim/bert-large-NER")
         ner_model = AutoModelForTokenClassification.from_pretrained("dslim/bert-large-NER")
-        self.ner = pipeline("ner", model=ner_model, tokenizer=ner_tokenizer, aggregation_strategy="simple", batch_size=8, device=0)
+        self.ner = pipeline(
+            "ner",
+            model=ner_model,
+            tokenizer=ner_tokenizer,
+            aggregation_strategy="simple",
+            batch_size=8,
+            device=pipeline_device,
+        )
+        self.device = device
         
         self.encoder = None
         self.not_existing_pages = set()
@@ -90,7 +102,7 @@ class LongWikiRetrieval(object):
     
     def load_encoder(self):
         from sentence_transformers import SentenceTransformer
-        encoder = SentenceTransformer("sentence-transformers/" + self.retrieval_type, device=0)
+        encoder = SentenceTransformer("sentence-transformers/" + self.retrieval_type, device=self.device)
         self.encoder = encoder
         assert self.batch_size is not None
     
@@ -146,7 +158,7 @@ class LongWikiRetrieval(object):
                 passage_vectors = self.embed_cache[topic]
             else:
                 inputs = [psg["title"] + " " + psg["text"].replace("<s>", "").replace("</s>", "") for psg in passages]
-                passage_vectors = self.encoder.encode(inputs, batch_size=self.batch_size, device=self.encoder.device, clean_up_tokenization_spaces=True)
+                passage_vectors = self.encoder.encode(inputs, batch_size=self.batch_size, device=self.encoder.device)
                 self.embed_cache[topic] = passage_vectors
                 
                 self.add_n_embed += 1
