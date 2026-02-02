@@ -8,6 +8,7 @@
 import os
 import time
 import json
+import hashlib
 
 from collections import defaultdict
 from dataclasses import dataclass
@@ -111,12 +112,75 @@ class FactHalu:
         self.extracted_claims_path = str(self.output_csv).replace(
             ".csv", "_all_claims.jsonl"
         )
+        self.extracted_claims_by_prompt_path = str(self.output_csv).replace(
+            ".csv", "_all_claims_by_prompt.jsonl"
+        )
+        self.extracted_claims_prompts_path = str(self.output_csv).replace(
+            ".csv", "_all_claims_prompts.jsonl"
+        )
         self.parsed_claims_path = str(self.output_csv).replace(
             ".csv", "_all_parsed_claims.jsonl"
         )
         self.verification_path = str(self.output_csv).replace(
             ".csv", "_verification_results.jsonl"
         )
+
+    def _hash_prompt(self, prompt: str) -> str:
+        return hashlib.sha1(prompt.encode("utf-8")).hexdigest()
+
+    def _read_prompt_cache(self, path: str):
+        cache = {}
+        if not os.path.exists(path):
+            return cache
+        with open(path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                prompt_hash = rec.get("prompt_hash")
+                eval_res = rec.get("eval_res")
+                prompt = rec.get("prompt")
+                if not prompt_hash:
+                    continue
+                cache[prompt_hash] = {
+                    "prompt_hash": prompt_hash,
+                    "prompt": prompt,
+                    "eval_res": eval_res,
+                }
+        return cache
+
+    def _write_prompt_cache(self, path: str, cache: dict):
+        with open(path, "w") as f:
+            for prompt_hash in sorted(cache.keys()):
+                f.write(json.dumps(cache[prompt_hash], ensure_ascii=False) + "\n")
+
+    def _read_prompt_hashes(self, path: str):
+        if not os.path.exists(path):
+            return None
+        hashes = []
+        with open(path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    return None
+                prompt_hash = rec.get("prompt_hash")
+                if not prompt_hash:
+                    return None
+                hashes.append(prompt_hash)
+        return hashes
+
+    def _write_prompt_hashes(self, path: str, hashes: List[str]):
+        with open(path, "w") as f:
+            for h in hashes:
+                f.write(json.dumps({"prompt_hash": h}, ensure_ascii=False) + "\n")
 
     def run(self):
         """
@@ -233,7 +297,11 @@ class FactHalu:
             print("Read from cache {}".format(refusal_path))
         else:
             abstains_eval_raw = utils.model_eval_step(
-                self.refusal_evaluator, abstain_prompts, max_token=128, batch_size=64
+                self.refusal_evaluator,
+                abstain_prompts,
+                max_token=128,
+                batch_size=64,
+                max_workers=getattr(self.args, "eval_max_workers", 16),
             )
             utils.save_eval_raw(abstains_eval_raw, output_file=refusal_path)
 
@@ -264,42 +332,120 @@ class FactHalu:
             )
         ]
 
-        all_claim_extractions = utils.read_eval_raw(extracted_claims_path)
-        if len(all_claim_extractions) > len(all_sentences):
+        all_prompts = [a.prompt for a in all_sentences]
+        prompt_hashes = [self._hash_prompt(p) for p in all_prompts]
+        prompt_cache = self._read_prompt_cache(self.extracted_claims_by_prompt_path)
+        cached_prompt_hashes = self._read_prompt_hashes(
+            self.extracted_claims_prompts_path
+        )
+        legacy_claim_extractions = utils.read_eval_raw(extracted_claims_path)
+        force_cache = bool(getattr(self.args, "force_cache", False))
+
+        all_claim_extractions = [None] * len(all_sentences)
+
+        if prompt_cache:
+            for i, (prompt_hash, prompt) in enumerate(zip(prompt_hashes, all_prompts)):
+                cached = prompt_cache.get(prompt_hash)
+                if cached and cached.get("prompt") == prompt:
+                    all_claim_extractions[i] = cached.get("eval_res")
+
+        legacy_cache_valid = (
+            cached_prompt_hashes is not None
+            and cached_prompt_hashes == prompt_hashes
+            and len(legacy_claim_extractions) == len(prompt_hashes)
+        )
+        legacy_prefix_valid = (
+            cached_prompt_hashes is not None
+            and len(legacy_claim_extractions) > 0
+            and cached_prompt_hashes[: len(legacy_claim_extractions)]
+            == prompt_hashes[: len(legacy_claim_extractions)]
+        )
+
+        if legacy_cache_valid:
+            print("***** [2-1] Reading extracted claims from cache (validated)")
+            for i, res in enumerate(legacy_claim_extractions):
+                if all_claim_extractions[i] is None:
+                    all_claim_extractions[i] = res
+                if res is not None:
+                    prompt_cache[prompt_hashes[i]] = {
+                        "prompt_hash": prompt_hashes[i],
+                        "prompt": all_prompts[i],
+                        "eval_res": res,
+                    }
+        elif legacy_prefix_valid:
             print(
-                "***** [2-1] Cache has more items than expected; ignoring cache and recomputing"
+                f"***** [2-1] Resuming extraction from cache (validated prefix), starting from {len(legacy_claim_extractions)}\n"
             )
-            all_claim_extractions = []
-        if len(all_claim_extractions) == len(all_sentences):
-            print("***** [2-1] Reading extracted claims from cache")
-        else:
-            to_extract_prompts = [a.prompt for a in all_sentences]
-            if all_claim_extractions != []:
+            for i, res in enumerate(legacy_claim_extractions):
+                if all_claim_extractions[i] is None:
+                    all_claim_extractions[i] = res
+                if res is not None:
+                    prompt_cache[prompt_hashes[i]] = {
+                        "prompt_hash": prompt_hashes[i],
+                        "prompt": all_prompts[i],
+                        "eval_res": res,
+                    }
+        elif force_cache and legacy_claim_extractions:
+            print(
+                "***** [2-1] Force-cache enabled; using legacy cache by index (may be misaligned)"
+            )
+            for i in range(
+                min(len(legacy_claim_extractions), len(all_claim_extractions))
+            ):
+                res = legacy_claim_extractions[i]
+                all_claim_extractions[i] = res
+                if res is not None:
+                    prompt_cache[prompt_hashes[i]] = {
+                        "prompt_hash": prompt_hashes[i],
+                        "prompt": all_prompts[i],
+                        "eval_res": res,
+                    }
+
+        mini_bsz = 100
+        missing = [
+            (i, prompt_hashes[i], all_prompts[i])
+            for i, res in enumerate(all_claim_extractions)
+            if res is None
+        ]
+        if not missing and len(all_claim_extractions) > 0 and not legacy_cache_valid:
+            print("***** [2-1] Reading extracted claims from cache (prompt-hash)")
+        if missing:
+            print(
+                f"***** [2-1] Extracting {len(missing)} missing prompts (cache hit: {len(all_claim_extractions) - len(missing)})"
+            )
+        for i in range(0, len(missing), mini_bsz):
+            batch = missing[i : i + mini_bsz]
+            batch_prompts = [p for _, _, p in batch]
+            batch_results = utils.model_eval_step(
+                self.claim_extractor,
+                batch_prompts,
+                max_token=512,
+                batch_size=8,
+                max_workers=getattr(self.args, "eval_max_workers", 16),
+            )
+            for (idx, prompt_hash, prompt), res in zip(batch, batch_results):
+                all_claim_extractions[idx] = res
+                if res is not None:
+                    prompt_cache[prompt_hash] = {
+                        "prompt_hash": prompt_hash,
+                        "prompt": prompt,
+                        "eval_res": res,
+                    }
+            utils.save_eval_raw(all_claim_extractions, output_file=extracted_claims_path)
+            self._write_prompt_cache(
+                self.extracted_claims_by_prompt_path, prompt_cache
+            )
+            self._write_prompt_hashes(
+                self.extracted_claims_prompts_path, prompt_hashes
+            )
+            if i % 500 == 0:
                 print(
-                    f"***** [2-1] Resuming extraction from cache, starting from {len(all_claim_extractions)}\n"
+                    f"Processed {min(i + 100, len(missing))} missing prompts. out of {len(missing)}"
                 )
-                to_extract_prompts = to_extract_prompts[len(all_claim_extractions) :]
 
-            mini_bsz = 100
-            for i in range(0, len(to_extract_prompts), mini_bsz):
-                batch_prompts = to_extract_prompts[i : i + mini_bsz]
-                batch_results = utils.model_eval_step(
-                    self.claim_extractor,
-                    batch_prompts,
-                    max_token=512,
-                    batch_size=8,
-                    max_workers=16,
-                )
-                all_claim_extractions.extend(batch_results)
-                utils.save_eval_raw(
-                    all_claim_extractions, output_file=extracted_claims_path
-                )
-                if i % 500 == 0:
-                    print(f"Processed {i + 100} sentences. out of {len(all_sentences)}")
-
-            utils.save_eval_raw(
-                all_claim_extractions, output_file=extracted_claims_path
-            )
+        utils.save_eval_raw(all_claim_extractions, output_file=extracted_claims_path)
+        self._write_prompt_cache(self.extracted_claims_by_prompt_path, prompt_cache)
+        self._write_prompt_hashes(self.extracted_claims_prompts_path, prompt_hashes)
 
         print("***** [2-2] Parsing extracted claims")
         all_claims = []
@@ -410,7 +556,7 @@ class FactHalu:
                     batch_prompts,
                     max_token=512,
                     batch_size=8,
-                    max_workers=16,
+                    max_workers=getattr(self.args, "eval_max_workers", 16),
                 )
                 claim_verification_res.extend(batch_results)
                 utils.save_eval_raw(

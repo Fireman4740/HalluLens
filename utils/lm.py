@@ -8,6 +8,7 @@
 import os
 import time
 import random
+import threading
 
 """
 NOTE: 
@@ -37,6 +38,31 @@ if not OPENROUTER_API_KEY and not USE_LM_STUDIO:
     print("Warning: OPENROUTER_API_KEY not found in environment or .env file.")
 OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")  # exemple
 
+# Global request coordination (shared across all threads)
+_MAX_IN_FLIGHT = max(1, int(os.getenv("OPENROUTER_MAX_IN_FLIGHT", "64")))
+_IN_FLIGHT_SEM = threading.Semaphore(_MAX_IN_FLIGHT)
+_COOLDOWN_LOCK = threading.Lock()
+_COOLDOWN_UNTIL = 0.0
+_SESSION = requests.Session()
+
+
+def _wait_for_cooldown():
+    while True:
+        with _COOLDOWN_LOCK:
+            now = time.time()
+            if now >= _COOLDOWN_UNTIL:
+                return
+            sleep_s = _COOLDOWN_UNTIL - now
+        time.sleep(min(sleep_s, 1.0))
+
+
+def _set_cooldown(seconds: float):
+    if seconds <= 0:
+        return
+    with _COOLDOWN_LOCK:
+        global _COOLDOWN_UNTIL
+        _COOLDOWN_UNTIL = max(_COOLDOWN_UNTIL, time.time() + seconds)
+
 
 def _get_retry_after_seconds(response):
     retry_after = response.headers.get("Retry-After")
@@ -59,14 +85,22 @@ def _post_with_retry(
 ):
     for attempt in range(max_retries + 1):
         try:
-            r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            _wait_for_cooldown()
+            _IN_FLIGHT_SEM.acquire()
+            try:
+                r = _SESSION.post(url, headers=headers, json=payload, timeout=timeout)
+            finally:
+                _IN_FLIGHT_SEM.release()
 
             if r.status_code == 429:
                 if attempt >= max_retries:
                     r.raise_for_status()
                 retry_after = _get_retry_after_seconds(r)
-                sleep_s = retry_after if retry_after is not None else base_sleep * (2**attempt)
+                sleep_s = (
+                    retry_after if retry_after is not None else base_sleep * (2**attempt)
+                )
                 sleep_s = min(max_sleep, sleep_s) + random.uniform(0, 0.5)
+                _set_cooldown(sleep_s)
                 time.sleep(sleep_s)
                 continue
 
@@ -193,32 +227,36 @@ def custom_api(prompt, model, temperature=0.0, max_tokens=1024, top_p=1.0, **kwa
     max_retries = int(os.getenv("OPENROUTER_MAX_RETRIES", "5"))
     base_sleep = float(os.getenv("OPENROUTER_RETRY_BASE_SECONDS", "1.0"))
     max_sleep = float(os.getenv("OPENROUTER_RETRY_MAX_SECONDS", "30.0"))
-    for attempt in range(max_retries + 1):
-        try:
-            r = _post_with_retry(
-                url,
-                headers=headers,
-                payload=payload,
-                timeout=180,
-                max_retries=0,
-                base_sleep=base_sleep,
-                max_sleep=max_sleep,
-            )
-        except requests.exceptions.RequestException as e:
-            if attempt >= max_retries:
-                raise
-            sleep_s = min(max_sleep, base_sleep * (2**attempt)) + random.uniform(0, 0.5)
-            time.sleep(sleep_s)
-            continue
+    empty_retries = int(os.getenv("OPENROUTER_EMPTY_RETRIES", "2"))
 
+    r = _post_with_retry(
+        url,
+        headers=headers,
+        payload=payload,
+        timeout=180,
+        max_retries=max_retries,
+        base_sleep=base_sleep,
+        max_sleep=max_sleep,
+    )
+
+    for attempt in range(empty_retries + 1):
         data = r.json()
         content = _extract_content(data)
         if content:
             return content
-        if attempt >= max_retries:
+        if attempt >= empty_retries:
             raise ValueError("OpenRouter returned empty response content")
         sleep_s = min(max_sleep, base_sleep * (2**attempt)) + random.uniform(0, 0.5)
         time.sleep(sleep_s)
+        r = _post_with_retry(
+            url,
+            headers=headers,
+            payload=payload,
+            timeout=180,
+            max_retries=max_retries,
+            base_sleep=base_sleep,
+            max_sleep=max_sleep,
+        )
 
 
 def generate(prompt, model, temperature=0.0, top_p=1.0, max_tokens=512, port=None, i=0):

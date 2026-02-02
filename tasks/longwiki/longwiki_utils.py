@@ -125,20 +125,25 @@ def read_eval_raw(eval_raw_file):
             eval_raw_res = [json.loads(line)["eval_res"] for line in f]
     return eval_raw_res
     
-def model_eval_step(evaluator, prompts, max_token=512, batch_size=16, max_workers=16, api_i=0):
-    max_retries = int(os.getenv("EVAL_EMPTY_RETRIES", "3"))
-    base_sleep = float(os.getenv("EVAL_RETRY_BASE_SECONDS", "1.0"))
+def model_eval_step(
+    evaluator, prompts, max_token=512, batch_size=16, max_workers=16, api_i=0
+):
+    empty_retries = int(os.getenv("EVAL_EMPTY_RETRIES", "1"))
+    base_sleep = float(os.getenv("EVAL_RETRY_BASE_SECONDS", "0.5"))
 
     def _safe_generate(p):
-        for attempt in range(max_retries + 1):
+        for attempt in range(empty_retries + 1):
             try:
-                return lm.generate(p, evaluator, i=api_i)
+                res = lm.generate(p, evaluator, i=api_i)
             except Exception as e:
-                if attempt >= max_retries:
-                    print(f"Eval request failed after retries: {e}")
-                    return ""
-                sleep_s = min(30.0, base_sleep * (2**attempt))
-                time.sleep(sleep_s)
+                print(f"Eval request failed: {e}")
+                return ""
+            if res:
+                return res
+            if attempt >= empty_retries:
+                return ""
+            sleep_s = min(5.0, base_sleep * (2**attempt))
+            time.sleep(sleep_s)
 
     eval_raw_res = thread_map(
         _safe_generate,

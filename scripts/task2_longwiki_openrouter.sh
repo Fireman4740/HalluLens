@@ -29,12 +29,17 @@ VERIFIER="${VERIFIER:-${MODEL_EVAL}}"
 TEMPERATURE="${TEMPERATURE:-0.0}"
 MAX_TOKENS="${MAX_TOKENS:-1024}"
 MAX_WORKERS="${MAX_WORKERS:-64}"
+PROMPT_MAX_WORKERS="${PROMPT_MAX_WORKERS:-50}"
+EVAL_MAX_WORKERS="${EVAL_MAX_WORKERS:-16}"
 LENGTH_WORDS="${LENGTH_WORDS:-500}"
 LOW_LEVEL="${LOW_LEVEL:-5}"
 HIGH_LEVEL="${HIGH_LEVEL:-10}"
 K="${K:-32}"
 INFERENCE_METHOD="${INFERENCE_METHOD:-custom}"
 EVAL_CACHE_PATH="${EVAL_CACHE_PATH:-}"
+RUN_NAMESPACE="${RUN_NAMESPACE:-}"
+OUTPUT_SUFFIX="${OUTPUT_SUFFIX:-}"
+CACHE_NAMESPACE="${CACHE_NAMESPACE:-}"
 USE_LM_STUDIO="${USE_LM_STUDIO:-false}"
 LM_STUDIO_URL="${LM_STUDIO_URL:-http://10.10.12.21:1234/v1/chat/completions}"
 LM_STUDIO_MODEL="${LM_STUDIO_MODEL:-openai/gpt-oss-20b}"
@@ -68,6 +73,21 @@ if [[ -n "${EVAL_CACHE_PATH}" ]]; then
   EVAL_CACHE_ARGS+=(--eval_cache_path "${EVAL_CACHE_PATH}")
 fi
 
+RUN_NAMESPACE_ARGS=()
+if [[ -n "${RUN_NAMESPACE}" ]]; then
+  RUN_NAMESPACE_ARGS+=(--run_namespace "${RUN_NAMESPACE}")
+fi
+
+OUTPUT_SUFFIX_ARGS=()
+if [[ -n "${OUTPUT_SUFFIX}" ]]; then
+  OUTPUT_SUFFIX_ARGS+=(--output_suffix "${OUTPUT_SUFFIX}")
+fi
+
+CACHE_NAMESPACE_ARGS=()
+if [[ -n "${CACHE_NAMESPACE}" ]]; then
+  CACHE_NAMESPACE_ARGS+=(--cache_namespace "${CACHE_NAMESPACE}")
+fi
+
 python -m tasks.longwiki.longwiki_main \
   --exp_mode "${EXP_MODE}" \
   --do_generate_prompt \
@@ -84,6 +104,8 @@ python -m tasks.longwiki.longwiki_main \
   --temperature "${TEMPERATURE}" \
   --max_tokens "${MAX_TOKENS}" \
   --max_workers "${MAX_WORKERS}" \
+  --prompt_max_workers "${PROMPT_MAX_WORKERS}" \
+  --eval_max_workers "${EVAL_MAX_WORKERS}" \
   --length_words "${LENGTH_WORDS}" \
   --low_level "${LOW_LEVEL}" \
   --high_level "${HIGH_LEVEL}" \
@@ -92,4 +114,7 @@ python -m tasks.longwiki.longwiki_main \
   ${TASKS_ARGS[@]+"${TASKS_ARGS[@]}"} \
   ${CREATIVITY_ARGS[@]+"${CREATIVITY_ARGS[@]}"} \
   ${LM_STUDIO_ARGS[@]+"${LM_STUDIO_ARGS[@]}"} \
-  ${EVAL_CACHE_ARGS[@]+"${EVAL_CACHE_ARGS[@]}"}
+  ${EVAL_CACHE_ARGS[@]+"${EVAL_CACHE_ARGS[@]}"} \
+  ${RUN_NAMESPACE_ARGS[@]+"${RUN_NAMESPACE_ARGS[@]}"} \
+  ${OUTPUT_SUFFIX_ARGS[@]+"${OUTPUT_SUFFIX_ARGS[@]}"} \
+  ${CACHE_NAMESPACE_ARGS[@]+"${CACHE_NAMESPACE_ARGS[@]}"}

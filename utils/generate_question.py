@@ -81,7 +81,7 @@ Question: {question}"""
 
 
 class WikiQA:
-    def __init__(self, q_generator_path, task):
+    def __init__(self, q_generator_path, task, max_workers=50):
         self.task = task  # 'longform' or 'precise'
         assert task in ["longform", "precise"]
 
@@ -101,6 +101,7 @@ class WikiQA:
             if task == "precise"
             else LONGFORM_ANSWERABILITY_PROMPT
         )
+        self.max_workers = max_workers
 
         try:
             self.encoding = AutoTokenizer.from_pretrained(
@@ -249,7 +250,7 @@ class WikiQA:
         results = thread_map(
             lambda p: lm.generate(p, self.q_generator, temperature=0.7, top_p=0.9),
             Q_MAKING_PROMPTS,
-            max_workers=50,
+            max_workers=self.max_workers,
             desc=f"using {self.q_generator}",
         )
         for i, r in enumerate(results):
@@ -266,7 +267,7 @@ class WikiQA:
         ans_results = thread_map(
             lambda p: lm.generate(p, self.q_generator, temperature=0.3),
             prompts_answerability,
-            max_workers=50,
+            max_workers=self.max_workers,
             desc=f"using {self.q_generator}",
         )
         filter_count = 0
@@ -337,8 +338,9 @@ def longform_QA_generation_run_batch(
     from_scratch=False,
     low_level=5,
     high_level=10,
+    max_workers=50,
 ):
-    qa = WikiQA(q_generator, task="longform")
+    qa = WikiQA(q_generator, task="longform", max_workers=max_workers)
 
     print("START TO GENERATE QUESTION N={}...".format(N))
     print("Wiki Source ={}...".format(wiki_input_path))

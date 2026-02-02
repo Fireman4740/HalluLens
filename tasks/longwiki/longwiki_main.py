@@ -9,6 +9,8 @@ import argparse
 import os
 import sys
 import json
+import hashlib
+import re
 from pathlib import Path
 
 # Avoid multiprocess resource_tracker shutdown errors on Python 3.12
@@ -37,10 +39,93 @@ except ModuleNotFoundError:
 
 TASKNAME = "longwiki"
 
+def _slug(value: str) -> str:
+    value = value or "default"
+    value = re.sub(r"[^a-zA-Z0-9._-]+", "_", value)
+    value = value.strip("_")
+    return value or "default"
+
+def _resolve_run_namespace(args, model_name: str) -> str:
+    namespace = getattr(args, "run_namespace", "auto")
+    if namespace == "none":
+        return ""
+    if namespace == "auto":
+        config = {
+            "exp_mode": args.exp_mode,
+            "model": args.model,
+            "q_generator": args.q_generator,
+            "claim_extractor": args.claim_extractor,
+            "abstain_evaluator": args.abstain_evaluator,
+            "verifier": args.verifier,
+            "inference_method": args.inference_method,
+            "N": args.N,
+            "k": args.k,
+            "max_tokens": args.max_tokens,
+            "temperature": args.temperature,
+            "max_workers": args.max_workers,
+            "tasks": args.tasks,
+            "creativity": args.creativity,
+            "length_words": args.length_words,
+            "static_user_prompt": args.static_user_prompt,
+            "low_level": args.low_level,
+            "high_level": args.high_level,
+            "use_lm_studio": args.use_lm_studio,
+            "lm_studio_url": args.lm_studio_url,
+            "lm_studio_model": args.lm_studio_model,
+            "db_path": args.db_path,
+        }
+        digest = hashlib.sha1(
+            json.dumps(config, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:8]
+        return f"{_slug(args.exp_mode)}_{_slug(model_name)}_{digest}"
+    return _slug(namespace)
+
+def _resolve_eval_cache_path(args, base_path: str, model_name: str) -> str:
+    cache_root = (
+        f"{base_path}/data/longwiki/.cache"
+        if args.eval_cache_path is None
+        else args.eval_cache_path
+    )
+    namespace = args.cache_namespace
+    if namespace == "none":
+        return cache_root
+    if namespace == "auto":
+        run_namespace = _resolve_run_namespace(args, model_name)
+        if run_namespace:
+            namespace = run_namespace
+        else:
+            config = {
+                "model_name": model_name,
+                "exp_mode": args.exp_mode,
+                "claim_extractor": args.claim_extractor,
+                "verifier": args.verifier,
+                "abstain_evaluator": args.abstain_evaluator,
+                "k": args.k,
+                "db_path": args.db_path,
+            }
+            digest = hashlib.sha1(
+                json.dumps(config, sort_keys=True).encode("utf-8")
+            ).hexdigest()[:8]
+            namespace = f"{_slug(args.exp_mode)}_{_slug(model_name)}_{digest}"
+    return os.path.join(cache_root, namespace)
+
+def _resolve_output_folder(args, model_name: str) -> Path:
+    suffix = getattr(args, "output_suffix", "") or _resolve_run_namespace(args, model_name)
+    suffix = _slug(suffix) if suffix else ""
+    suffix_part = f"__{suffix}" if suffix else ""
+    return Path(f"output/{TASKNAME}-{args.exp_mode}/{model_name}{suffix_part}")
+
+def _resolve_qa_output_path(args, model_name: str) -> str:
+    suffix = getattr(args, "output_suffix", "") or _resolve_run_namespace(args, model_name)
+    suffix = _slug(suffix) if suffix else ""
+    suffix_part = f"__{suffix}" if suffix else ""
+    if args.exp_mode == "hybrid":
+        return f"data/longwiki/save/hybrid_{model_name}{suffix_part}.jsonl"
+    return f"data/longwiki/save/longwiki_{model_name}{suffix_part}.jsonl"
 
 def run_eval(args):
     model_name = args.model.split("/")[-1]
-    output_folder = Path(f"output/{TASKNAME}-{args.exp_mode}/{model_name}")
+    output_folder = _resolve_output_folder(args, model_name)
     output_csv = output_folder / "output.csv"
     generations_file_path = output_folder / "generation.jsonl"
     output_folder.mkdir(parents=True, exist_ok=True)
@@ -52,11 +137,8 @@ def run_eval(args):
         )
         return
     base_path = os.path.dirname(os.path.abspath(__name__))
-    eval_cache_path = (
-        f"{base_path}/data/longwiki/.cache"
-        if args.eval_cache_path is None
-        else args.eval_cache_path
-    )
+    eval_cache_path = _resolve_eval_cache_path(args, base_path, model_name)
+    os.makedirs(eval_cache_path, exist_ok=True)
 
     facthalu = FactHalu(
         generations_file_path,
@@ -91,7 +173,7 @@ def run_eval(args):
 
 def save_run_config(args, qa_output_path: str):
     model_name = args.model.split("/")[-1]
-    output_folder = Path(f"output/{TASKNAME}-{args.exp_mode}/{model_name}")
+    output_folder = _resolve_output_folder(args, model_name)
     output_folder.mkdir(parents=True, exist_ok=True)
 
     openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
@@ -192,6 +274,18 @@ if __name__ == "__main__":
     )
     parser.add_argument("--eval_cache_path", type=str, default=None)
     parser.add_argument(
+        "--cache_namespace",
+        type=str,
+        default="auto",
+        help="Namespace under eval_cache_path: auto | none | <name>",
+    )
+    parser.add_argument(
+        "--run_namespace",
+        type=str,
+        default="auto",
+        help="Namespace for outputs/prompts: auto | none | <name>",
+    )
+    parser.add_argument(
         "--db_path", type=str, default="data/wiki_data/.cache/enwiki-20230401.db"
     )
     parser.add_argument("--N", type=int, default=250)
@@ -205,6 +299,29 @@ if __name__ == "__main__":
         help="Temperature for inference model (0.0 = deterministic, higher = more random)",
     )
     parser.add_argument("--max_workers", type=int, default=64)
+    parser.add_argument(
+        "--prompt_max_workers",
+        type=int,
+        default=50,
+        help="Max workers for prompt generation",
+    )
+    parser.add_argument(
+        "--eval_max_workers",
+        type=int,
+        default=16,
+        help="Max workers for evaluation (abstain/extract/verify)",
+    )
+    parser.add_argument(
+        "--force-cache",
+        action="store_true",
+        help="Force using legacy cache by index even when prompt hashes mismatch",
+    )
+    parser.add_argument(
+        "--output_suffix",
+        type=str,
+        default="",
+        help="Append a suffix to the output folder name to isolate runs",
+    )
     # Hybrid prompt generation arguments
     parser.add_argument(
         "--tasks",
@@ -275,10 +392,7 @@ if __name__ == "__main__":
     model_name = args.model.split("/")[-1]
 
     # Determine output path based on mode
-    if args.exp_mode == "hybrid":
-        QA_OUTPUT_PATH = f"data/longwiki/save/hybrid_{model_name}.jsonl"
-    else:
-        QA_OUTPUT_PATH = f"data/longwiki/save/longwiki_{model_name}.jsonl"
+    QA_OUTPUT_PATH = _resolve_qa_output_path(args, model_name)
 
     save_run_config(args, QA_OUTPUT_PATH)
 
@@ -304,6 +418,7 @@ if __name__ == "__main__":
                     q_generator=args.q_generator,
                     output_path=QA_OUTPUT_PATH,
                     from_scratch=False,
+                    max_workers=args.prompt_max_workers,
                 )
                 all_prompts = pd.DataFrame(QAs)
             elif args.exp_mode == "hybrid":
@@ -330,6 +445,7 @@ if __name__ == "__main__":
                     creativity_levels=args.creativity,
                     length_words=args.length_words,
                     static_user_prompt=args.static_user_prompt,
+                    max_workers=args.prompt_max_workers,
                 )
                 all_prompts = pd.DataFrame(QAs)
                 print(f"Generated {len(all_prompts)} hybrid prompts")
@@ -346,10 +462,14 @@ if __name__ == "__main__":
 
         print(f"Start Inference for {args.model} ", args.exp_mode, len(all_prompts))
 
+        output_folder = _resolve_output_folder(args, model_name)
+        output_folder.mkdir(parents=True, exist_ok=True)
+        generations_file_path = output_folder / "generation.jsonl"
         exp.run_exp(
             task=f"{TASKNAME}-{args.exp_mode}",
             model_path=args.model,
             all_prompts=all_prompts,
+            generations_file_path=generations_file_path,
             inference_method=args.inference_method,
             max_tokens=args.max_tokens,
             temperature=args.temperature,

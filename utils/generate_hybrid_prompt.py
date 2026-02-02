@@ -653,6 +653,7 @@ def hybrid_prompt_generation_run_batch(
     static_user_prompt: bool = False,
     lm_studio_url: Optional[str] = None,
     lm_studio_model: Optional[str] = None,
+    max_workers: int = 1,
 ) -> List[dict]:
     """
     Main batch generation function matching the signature of longform_QA_generation_run_batch.
@@ -683,7 +684,7 @@ def hybrid_prompt_generation_run_batch(
     # Setup config
     config = GenerationConfig(
         prompt_writer_model=q_generator,
-        max_workers=1,  # Sequential for stability
+        max_workers=max_workers,
         static_user_prompt=static_user_prompt,
         cache_path=str(Path(output_path).parent / ".hybrid_cache.db")
         if output_path
