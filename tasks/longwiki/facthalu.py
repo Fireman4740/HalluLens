@@ -16,6 +16,7 @@ from typing import List, Optional, Dict
 
 import pandas as pd
 from tqdm import tqdm
+from tqdm.contrib.concurrent import thread_map
 
 from tasks.longwiki import prompt_templates
 from segtok.segmenter import split_single
@@ -515,29 +516,76 @@ class FactHalu:
 
         print("***** [3] Ref Src: ", self.ref_src)
         # 1. Prepare the prompt for verification
+        retrieval_batch_size = int(os.getenv("RETRIEVAL_BATCH_SIZE", "64"))
         retrieval = LongWikiRetrieval(
             self.db,
             cache_base_path=self.CACHE_BASE_PATH,
             embed_cache_path=self.embedded_cache_path,
             retrieval_type="gtr-t5-large",
-            batch_size=64,
+            batch_size=retrieval_batch_size,
         )
         questions = list(set([claim.question for claim in all_claims]))
         retrieval.make_ner_cache(questions)
-        for claim in tqdm(all_claims):
+        precompute_env = os.getenv("VERIFY_PROMPT_PRECOMPUTE_QUERIES", "true")
+        precompute_queries = str(precompute_env).lower() not in ("0", "false", "no")
+        query_vectors = None
+        if precompute_queries and all_claims:
+            retrieval.load_encoder()
+            query_batch_size = int(
+                os.getenv("RETRIEVAL_QUERY_BATCH_SIZE", str(retrieval.batch_size or 32))
+            )
+            retrieval_queries = [
+                f"{claim.topic} {claim.claim.strip()}" for claim in all_claims
+            ]
+            query_vectors = retrieval.encoder.encode(
+                retrieval_queries,
+                batch_size=query_batch_size,
+                device=retrieval.encoder.device,
+            )
+        prompt_workers_env = os.getenv("VERIFY_PROMPT_MAX_WORKERS")
+        if prompt_workers_env is not None:
+            prompt_workers = max(1, int(prompt_workers_env))
+        else:
+            prompt_workers = max(1, min(8, getattr(self.args, "eval_max_workers", 16)))
+
+        def _build_prompt(indexed_claim) -> str:
+            idx, claim = indexed_claim
+            query_vector = query_vectors[idx] if query_vectors is not None else None
             passages = retrieval.get_topk_related_passages(
-                topic=claim.topic, claim=claim.claim, question=claim.question, k=5
+                topic=claim.topic,
+                claim=claim.claim,
+                question=claim.question,
+                k=5,
+                query_vector=query_vector,
             )
-            context = ""
+            context_parts = []
             for _, psg in enumerate(reversed(passages)):
-                context += "Title: {}\nText: {}\n\n".format(
-                    psg["title"], psg["text"].replace("<s>", "").replace("</s>", "")
+                context_parts.append(
+                    "Title: {}\nText: {}\n\n".format(
+                        psg["title"], psg["text"].replace("<s>", "").replace("</s>", "")
+                    )
                 )
-            claim.prompt = (
-                prompt_templates.VERIFICATION_TEMPLATE_W_REFERENCE_RETRIEVAL.format(
-                    claim=claim.claim, reference=context
-                )
+            context = "".join(context_parts)
+            return prompt_templates.VERIFICATION_TEMPLATE_W_REFERENCE_RETRIEVAL.format(
+                claim=claim.claim, reference=context
             )
+
+        indexed_claims = list(enumerate(all_claims))
+        if prompt_workers == 1:
+            for indexed_claim in tqdm(
+                indexed_claims, desc="Preparing verification prompts"
+            ):
+                _, claim = indexed_claim
+                claim.prompt = _build_prompt(indexed_claim)
+        else:
+            prompts = thread_map(
+                _build_prompt,
+                indexed_claims,
+                max_workers=prompt_workers,
+                desc="Preparing verification prompts",
+            )
+            for claim, prompt in zip(all_claims, prompts):
+                claim.prompt = prompt
         print("***** Prepared all verification prompts")
 
         # 2. Verify the claims

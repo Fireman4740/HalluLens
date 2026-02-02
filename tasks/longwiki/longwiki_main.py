@@ -69,6 +69,7 @@ def _resolve_run_namespace(args, model_name: str) -> str:
             "static_user_prompt": args.static_user_prompt,
             "low_level": args.low_level,
             "high_level": args.high_level,
+            "prompt_seed": args.prompt_seed,
             "use_lm_studio": args.use_lm_studio,
             "lm_studio_url": args.lm_studio_url,
             "lm_studio_model": args.lm_studio_model,
@@ -342,6 +343,12 @@ if __name__ == "__main__":
         help="Target word count for hybrid prompts",
     )
     parser.add_argument(
+        "--prompt_seed",
+        type=int,
+        default=None,
+        help="Random seed for deterministic subject selection in hybrid prompts",
+    )
+    parser.add_argument(
         "--static_user_prompt",
         action="store_true",
         help="Use deterministic prompt template for hybrid prompt generation",
@@ -446,6 +453,7 @@ if __name__ == "__main__":
                     length_words=args.length_words,
                     static_user_prompt=args.static_user_prompt,
                     max_workers=args.prompt_max_workers,
+                    seed=args.prompt_seed,
                 )
                 all_prompts = pd.DataFrame(QAs)
                 print(f"Generated {len(all_prompts)} hybrid prompts")

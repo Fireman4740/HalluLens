@@ -654,6 +654,7 @@ def hybrid_prompt_generation_run_batch(
     lm_studio_url: Optional[str] = None,
     lm_studio_model: Optional[str] = None,
     max_workers: int = 1,
+    seed: Optional[int] = None,
 ) -> List[dict]:
     """
     Main batch generation function matching the signature of longform_QA_generation_run_batch.
@@ -676,6 +677,11 @@ def hybrid_prompt_generation_run_batch(
         List of generated prompts in longwiki format
     """
     import jsonlines
+    import numpy as np
+
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
 
     print(f"Starting hybrid prompt generation N={N}...")
     print(f"Wiki Source = {wiki_input_path}")
@@ -739,7 +745,10 @@ def hybrid_prompt_generation_run_batch(
             print(f"Warning: No data for h_score_cat={bin_idx}")
             continue
 
-        level_wiki = level_wiki.sample(frac=1)  # Shuffle
+        if seed is None:
+            level_wiki = level_wiki.sample(frac=1)  # Shuffle
+        else:
+            level_wiki = level_wiki.sample(frac=1, random_state=seed)  # Shuffle
 
         # Calculate how many we need from this bin
         remaining = N - len(all_results)
@@ -812,6 +821,12 @@ if __name__ == "__main__":
         help="Model for prompt generation",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for deterministic subject selection",
+    )
+    parser.add_argument(
         "--N", type=int, default=250, help="Number of prompts to generate"
     )
     parser.add_argument(
@@ -865,6 +880,7 @@ if __name__ == "__main__":
         static_user_prompt=args.static_user_prompt,
         lm_studio_url=args.lm_studio_url,
         lm_studio_model=args.lm_studio_model,
+        seed=args.seed,
     )
 
     print(f"\nGenerated {len(results)} prompts")

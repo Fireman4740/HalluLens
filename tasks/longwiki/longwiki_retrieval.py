@@ -6,6 +6,8 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
+import threading
+from collections import OrderedDict
 
 import sqlite3
 import numpy as np
@@ -80,20 +82,28 @@ class LongWikiRetrieval(object):
 
         self.retrieval_type = retrieval_type
         self.batch_size = batch_size
+        self.page_cache_size = int(os.getenv("RETRIEVAL_PAGE_CACHE_SIZE", "1024"))
+        self.page_cache = OrderedDict() if self.page_cache_size > 0 else None
+        self.page_cache_lock = threading.Lock()
+        self.embed_cache_lock = threading.Lock()
+        self.encoder_lock = threading.Lock()
+        self.not_existing_pages_lock = threading.Lock()
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         pipeline_device = 0 if device == "cuda" else -1
 
         ner_tokenizer = AutoTokenizer.from_pretrained("dslim/bert-large-NER")
         ner_model = AutoModelForTokenClassification.from_pretrained("dslim/bert-large-NER")
+        ner_batch_size = int(os.getenv("NER_BATCH_SIZE", "32"))
         self.ner = pipeline(
             "ner",
             model=ner_model,
             tokenizer=ner_tokenizer,
             aggregation_strategy="simple",
-            batch_size=8,
+            batch_size=ner_batch_size,
             device=pipeline_device,
         )
+        self.ner_batch_size = ner_batch_size
         self.device = device
         
         self.encoder = None
@@ -133,8 +143,10 @@ class LongWikiRetrieval(object):
         self.cache = Cache(self.cache_path)
 
     
-    def save_cache(self):        
-        if self.add_n_embed > 0:
+    def save_cache(self, updated: bool = False):
+        if not updated:
+            return
+        with self.embed_cache_lock:
             if os.path.exists(self.embed_cache_path):
                 with open(self.embed_cache_path, "rb") as f:
                     new_cache = pkl.load(f)
@@ -142,50 +154,91 @@ class LongWikiRetrieval(object):
                 
             with open(self.embed_cache_path, "wb") as f:
                 pkl.dump(self.embed_cache, f)
-        
-    def get_topk_passages(self, topic, retrieval_query, key_passages, k=5):
-        if self.encoder is None:
-            self.load_encoder()
 
-        self.add_n_embed = 0
-        passage_vectors_all = None
+    def _get_cached_passages(self, title: str):
+        if self.page_cache is None:
+            return self.db.get_text_from_title(title)
+        with self.page_cache_lock:
+            cached = self.page_cache.get(title)
+            if cached is not None:
+                self.page_cache.move_to_end(title)
+                return cached
+        pages = self.db.get_text_from_title(title)
+        with self.page_cache_lock:
+            self.page_cache[title] = pages
+            if len(self.page_cache) > self.page_cache_size:
+                self.page_cache.popitem(last=False)
+        return pages
+        
+    def get_topk_passages(self, topic, retrieval_query, key_passages, k=5, query_vector=None):
+        if self.encoder is None:
+            with self.encoder_lock:
+                if self.encoder is None:
+                    self.load_encoder()
+
+        updated = False
+        passage_vectors_list = []
         passages_all = []
 
         for topic, passages in key_passages.items():
-            passages_all += passages
+            passages_all.extend(passages)
 
-            if topic in self.embed_cache:
-                passage_vectors = self.embed_cache[topic]
-            else:
+            with self.embed_cache_lock:
+                passage_vectors = self.embed_cache.get(topic)
+            if passage_vectors is None:
                 inputs = [psg["title"] + " " + psg["text"].replace("<s>", "").replace("</s>", "") for psg in passages]
-                passage_vectors = self.encoder.encode(inputs, batch_size=self.batch_size, device=self.encoder.device)
-                self.embed_cache[topic] = passage_vectors
-                
-                self.add_n_embed += 1
+                with self.encoder_lock:
+                    passage_vectors = self.encoder.encode(inputs, batch_size=self.batch_size, device=self.encoder.device)
+                with self.embed_cache_lock:
+                    self.embed_cache[topic] = passage_vectors
+                updated = True
 
-            passage_vectors_all = np.concatenate([passage_vectors_all, passage_vectors], axis=0) if passage_vectors_all is not None else passage_vectors
+            passage_vectors_list.append(passage_vectors)
 
-        query_vectors = self.encoder.encode([retrieval_query], 
-                                            batch_size=self.batch_size,
-                                            device=self.encoder.device)[0]
+        if not passage_vectors_list:
+            return []
+        passage_vectors_all = (
+            np.concatenate(passage_vectors_list, axis=0)
+            if len(passage_vectors_list) > 1
+            else passage_vectors_list[0]
+        )
+
+        if query_vector is None:
+            with self.encoder_lock:
+                query_vectors = self.encoder.encode(
+                    [retrieval_query],
+                    batch_size=self.batch_size,
+                    device=self.encoder.device,
+                )[0]
+        else:
+            query_vectors = query_vector
         
         scores = np.inner(query_vectors, passage_vectors_all)
         indices = np.argsort(-scores)[:k]
 
-        if self.add_n_embed > 0:
-            self.save_cache()
+        if updated:
+            self.save_cache(updated=True)
 
         return [passages_all[i] for i in indices]
 
     def make_ner_cache(self, questions: List[str]):
-        for question in questions:
-            ners = self.Q_NER_cache.get_item(question)
-            if ners is None:
-                ner_results = self.ner(question)
-                ners = [r['word'] for r in ner_results if '#' not in r['word']]
-                self.Q_NER_cache.set_item(question, ners)
+        missing = [q for q in questions if self.Q_NER_cache.get_item(q) is None]
+        if not missing:
+            return
+
+        batch_results = self.ner(missing)
+        if (
+            batch_results
+            and isinstance(batch_results, list)
+            and batch_results
+            and isinstance(batch_results[0], dict)
+        ):
+            batch_results = [batch_results]
+        for question, ner_results in zip(missing, batch_results):
+            ners = [r["word"] for r in ner_results if "#" not in r["word"]]
+            self.Q_NER_cache.set_item(question, ners)
                 
-    def get_topk_related_passages(self, topic, claim, question, k=5, use_cache=True):
+    def get_topk_related_passages(self, topic, claim, question, k=5, use_cache=True, query_vector=None):
         """
             NER based top-k passage retrieval
             Extract named entities from question, get relevant pages for each entity.
@@ -224,15 +277,20 @@ class LongWikiRetrieval(object):
         key_passages = {}
         for title in all_related_pages:
             title = title.replace("_", " ")
-            if title in self.not_existing_pages: continue
+            with self.not_existing_pages_lock:
+                if title in self.not_existing_pages:
+                    continue
             try:
-                pages = self.db.get_text_from_title(title)
+                pages = self._get_cached_passages(title)
                 key_passages[title] = pages
             except:
-                self.not_existing_pages.add(title)
+                with self.not_existing_pages_lock:
+                    self.not_existing_pages.add(title)
                 continue
         
-        top_k_related_passages = self.get_topk_passages(topic, retrieval_query, key_passages, k)
+        top_k_related_passages = self.get_topk_passages(
+            topic, retrieval_query, key_passages, k, query_vector=query_vector
+        )
         self.cache.set_item(cache_key, top_k_related_passages)
 
         self.add_n += 1
