@@ -5,13 +5,50 @@
 # - Response generation: MODEL_RESPONSE (default: mistral-small-creative)
 # - Evaluation: MODEL_EVAL (default: openai/gpt-oss-safeguard-20b)
 # - Tasks: set TASKS="INTERVIEW NEWS_ARTICLE ..." to pass --tasks
-
 set -euo pipefail
 
+load_dotenv() {
+  local dotenv_file="${1:-.env}"
+  [[ -f "${dotenv_file}" ]] || return 0
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line="${line%$'\r'}"
+    [[ "${line}" =~ ^[[:space:]]*$ ]] && continue
+    [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+
+    if [[ "${line}" == export[[:space:]]* ]]; then
+      line="${line#export }"
+    fi
+
+    [[ "${line}" == *"="* ]] || continue
+    local key="${line%%=*}"
+    local val="${line#*=}"
+
+    key="${key%%[[:space:]]*}"
+    [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+
+    # Trim leading whitespace on value.
+    val="${val#"${val%%[![:space:]]*}"}"
+
+    if [[ "${val}" == \"*\" ]]; then
+      val="${val#\"}"
+      val="${val%%\"*}"
+    elif [[ "${val}" == \'*\' ]]; then
+      val="${val#\'}"
+      val="${val%%\'*}"
+    else
+      # Strip inline comments (only when preceded by whitespace).
+      val="${val%%[[:space:]]#*}"
+      # Trim trailing whitespace.
+      val="${val%"${val##*[![:space:]]}"}"
+    fi
+
+    export "${key}=${val}"
+  done < "${dotenv_file}"
+}
+
 if [[ -f ".env" ]]; then
-  set -a
-  . ./.env
-  set +a
+  load_dotenv ".env"
 fi
 
 EXP_MODE="${EXP_MODE:-longwiki}"
@@ -110,11 +147,11 @@ python -m tasks.longwiki.longwiki_main \
   --low_level "${LOW_LEVEL}" \
   --high_level "${HIGH_LEVEL}" \
   --inference_method "${INFERENCE_METHOD}" \
-  ${STATIC_ARGS[@]+"${STATIC_ARGS[@]}"} \
-  ${TASKS_ARGS[@]+"${TASKS_ARGS[@]}"} \
-  ${CREATIVITY_ARGS[@]+"${CREATIVITY_ARGS[@]}"} \
-  ${LM_STUDIO_ARGS[@]+"${LM_STUDIO_ARGS[@]}"} \
-  ${EVAL_CACHE_ARGS[@]+"${EVAL_CACHE_ARGS[@]}"} \
-  ${RUN_NAMESPACE_ARGS[@]+"${RUN_NAMESPACE_ARGS[@]}"} \
-  ${OUTPUT_SUFFIX_ARGS[@]+"${OUTPUT_SUFFIX_ARGS[@]}"} \
-  ${CACHE_NAMESPACE_ARGS[@]+"${CACHE_NAMESPACE_ARGS[@]}"}
+  "${STATIC_ARGS[@]}" \
+  "${TASKS_ARGS[@]}" \
+  "${CREATIVITY_ARGS[@]}" \
+  "${LM_STUDIO_ARGS[@]}" \
+  "${EVAL_CACHE_ARGS[@]}" \
+  "${RUN_NAMESPACE_ARGS[@]}" \
+  "${OUTPUT_SUFFIX_ARGS[@]}" \
+  "${CACHE_NAMESPACE_ARGS[@]}"

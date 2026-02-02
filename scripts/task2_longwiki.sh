@@ -6,10 +6,46 @@
 # LICENSE file in the root directory of this source tree.
 
 GPU="${GPU:-0}"
+
+load_dotenv() {
+    local dotenv_file="${1:-.env}"
+    [[ -f "${dotenv_file}" ]] || return 0
+
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        line="${line%$'\r'}"
+        [[ "${line}" =~ ^[[:space:]]*$ ]] && continue
+        [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+
+        if [[ "${line}" == export[[:space:]]* ]]; then
+            line="${line#export }"
+        fi
+
+        [[ "${line}" == *"="* ]] || continue
+        local key="${line%%=*}"
+        local val="${line#*=}"
+
+        key="${key%%[[:space:]]*}"
+        [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+
+        val="${val#"${val%%[![:space:]]*}"}"
+
+        if [[ "${val}" == \"*\" ]]; then
+            val="${val#\"}"
+            val="${val%%\"*}"
+        elif [[ "${val}" == \'*\' ]]; then
+            val="${val#\'}"
+            val="${val%%\'*}"
+        else
+            val="${val%%[[:space:]]#*}"
+            val="${val%"${val##*[![:space:]]}"}"
+        fi
+
+        export "${key}=${val}"
+    done < "${dotenv_file}"
+}
+
 if [[ -f ".env" ]]; then
-    set -a
-    . ./.env
-    set +a
+    load_dotenv ".env"
 fi
 MODELS=(
     "meta-llama/Llama-3.1-8B-Instruct"
