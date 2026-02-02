@@ -40,9 +40,11 @@ def jsonify_ans(
             jsonifyed_res.append(json.loads(check_validity(r)))
             continue
         else:
-            r = r.split("\n")[0]
             try:
-                jsonifyed_res.append(json.loads(r))
+                start = r.find("{")
+                end = r.rfind("}")
+                json_candidate = r[start : end + 1] if start != -1 and end != -1 and end > start else r
+                jsonifyed_res.append(json.loads(json_candidate))
             except:
                 print(f"Error in eval_answer: {r}")
                 error = True
@@ -59,7 +61,10 @@ def jsonify_ans(
                         if check_validity(re_eval) != -1:
                             json_res = json.loads(check_validity(re_eval))
                         else:
-                            json_res = json.loads(re_eval.split("\n")[0])
+                            start = re_eval.find("{")
+                            end = re_eval.rfind("}")
+                            json_candidate = re_eval[start : end + 1] if start != -1 and end != -1 and end > start else re_eval
+                            json_res = json.loads(json_candidate)
                         error = False
                         
                     except:

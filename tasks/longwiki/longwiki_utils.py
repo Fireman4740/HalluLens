@@ -181,7 +181,7 @@ def jsonify_ans(raw_responses, eval_prompts, evaluator, key):
             jsonifyed_res.append(json.loads(check_validity(r)))
             continue
         else:
-            r = (r or "").split("\n")[0]
+            r = r or ""
             try:
                 json_candidate = extract_json_candidate(r)
                 jsonifyed_res.append(json.loads(json_candidate or r))
@@ -212,7 +212,7 @@ def jsonify_ans(raw_responses, eval_prompts, evaluator, key):
                         if check_validity(re_eval) != -1:
                             json_res = json.loads(check_validity(re_eval))
                         else:
-                            re_eval = (re_eval or "").split("\n")[0]
+                            re_eval = re_eval or ""
                             json_candidate = extract_json_candidate(re_eval)
                             json_res = json.loads(json_candidate or re_eval)
                         jsonifyed_res.append(json_res)
