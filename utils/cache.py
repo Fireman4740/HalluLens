@@ -20,10 +20,19 @@ class Cache:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
         self.lock = threading.Lock()
+        self.commit_every = int(os.getenv("CACHE_COMMIT_EVERY", "1"))
+        self._pending_writes = 0
         # Ensure that the connection is set up for serialized mode, which is the default.
         self.conn = sqlite3.connect(
             self.db_path, check_same_thread=False, timeout=30.0
         )  # Increased timeout
+        # Faster concurrency + fewer fsyncs (best-effort; some filesystems may ignore parts).
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+            self.conn.execute("PRAGMA temp_store=MEMORY")
+        except Exception:
+            pass
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT)"
         )
@@ -42,7 +51,10 @@ class Cache:
                         "REPLACE INTO cache (key, value) VALUES (?, ?)",
                         (hashed_key, json_value),
                     )
-                    self.conn.commit()
+                    self._pending_writes += 1
+                    if self.commit_every <= 1 or self._pending_writes >= self.commit_every:
+                        self.conn.commit()
+                        self._pending_writes = 0
                     break
                 except sqlite3.OperationalError as e:
                     if "locked" in str(e):
@@ -50,6 +62,12 @@ class Cache:
                         time.sleep(0.1)  # Wait a bit for the lock to be released
                     else:
                         raise
+
+    def flush(self):
+        with self.lock:
+            if self._pending_writes > 0:
+                self.conn.commit()
+                self._pending_writes = 0
 
     def hash_key(self, key: str) -> str:
         """Generate a SHA-256 hash of the key."""
@@ -68,6 +86,10 @@ class Cache:
                 return None
 
     def __del__(self):
+        try:
+            self.flush()
+        except Exception:
+            pass
         self.conn.close()
 
     def cache_stats(self):

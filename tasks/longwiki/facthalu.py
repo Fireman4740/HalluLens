@@ -525,7 +525,8 @@ class FactHalu:
             batch_size=retrieval_batch_size,
         )
         questions = list(set([claim.question for claim in all_claims]))
-        retrieval.make_ner_cache(questions)
+        if retrieval.use_ner:
+            retrieval.make_ner_cache(questions)
         precompute_env = os.getenv("VERIFY_PROMPT_PRECOMPUTE_QUERIES", "true")
         precompute_queries = str(precompute_env).lower() not in ("0", "false", "no")
         query_vectors = None
@@ -542,6 +543,13 @@ class FactHalu:
                 batch_size=query_batch_size,
                 device=retrieval.encoder.device,
             )
+        profile_env = os.getenv("VERIFY_PROMPT_PROFILE", "false")
+        profile = str(profile_env).lower() in ("1", "true", "yes")
+        if profile:
+            import threading
+
+            timing_lock = threading.Lock()
+            timing = {"retrieval_s": 0.0, "format_s": 0.0, "n": 0}
         prompt_workers_env = os.getenv("VERIFY_PROMPT_MAX_WORKERS")
         if prompt_workers_env is not None:
             prompt_workers = max(1, int(prompt_workers_env))
@@ -551,6 +559,7 @@ class FactHalu:
         def _build_prompt(indexed_claim) -> str:
             idx, claim = indexed_claim
             query_vector = query_vectors[idx] if query_vectors is not None else None
+            t0 = time.perf_counter() if profile else None
             passages = retrieval.get_topk_related_passages(
                 topic=claim.topic,
                 claim=claim.claim,
@@ -558,6 +567,7 @@ class FactHalu:
                 k=5,
                 query_vector=query_vector,
             )
+            t1 = time.perf_counter() if profile else None
             context_parts = []
             for _, psg in enumerate(reversed(passages)):
                 context_parts.append(
@@ -566,9 +576,16 @@ class FactHalu:
                     )
                 )
             context = "".join(context_parts)
-            return prompt_templates.VERIFICATION_TEMPLATE_W_REFERENCE_RETRIEVAL.format(
+            prompt = prompt_templates.VERIFICATION_TEMPLATE_W_REFERENCE_RETRIEVAL.format(
                 claim=claim.claim, reference=context
             )
+            if profile:
+                t2 = time.perf_counter()
+                with timing_lock:
+                    timing["retrieval_s"] += (t1 - t0) if (t0 is not None and t1 is not None) else 0.0
+                    timing["format_s"] += (t2 - t1) if (t1 is not None) else 0.0
+                    timing["n"] += 1
+            return prompt
 
         indexed_claims = list(enumerate(all_claims))
         if prompt_workers == 1:
@@ -587,6 +604,15 @@ class FactHalu:
             for claim, prompt in zip(all_claims, prompts):
                 claim.prompt = prompt
         print("***** Prepared all verification prompts")
+        if profile and timing["n"] > 0:
+            n = timing["n"]
+            print(
+                "***** Step 3 prompt prep timings (avg/claim): "
+                f"retrieval={timing['retrieval_s'] / n:.3f}s, "
+                f"format={timing['format_s'] / n:.3f}s, "
+                f"total={(timing['retrieval_s'] + timing['format_s']) / n:.3f}s"
+            )
+        retrieval.flush_embed_cache()
 
         # 2. Verify the claims
         verification_prompts = [c.prompt for c in all_claims]

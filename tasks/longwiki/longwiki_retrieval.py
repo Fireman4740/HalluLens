@@ -26,7 +26,41 @@ class LongWikiDB(DocDB):
         self.title_db_path = db_path.replace(".db", "-title.db")
         self.title_connection = sqlite3.connect(self.title_db_path, check_same_thread=False)
         self.SPECIAL_SEPARATOR = "####SPECIAL####SEPARATOR####"
+        self._local = threading.local()
         self._ensure_titles_table()
+
+    def _get_doc_connection(self):
+        conn = getattr(self._local, "doc_conn", None)
+        if conn is None:
+            # Read-only connections allow concurrent reads without locking the writer connection.
+            conn = sqlite3.connect(
+                f"file:{self.db_path}?mode=ro",
+                uri=True,
+                check_same_thread=False,
+                timeout=30.0,
+            )
+            try:
+                conn.execute("PRAGMA query_only=ON")
+            except Exception:
+                pass
+            self._local.doc_conn = conn
+        return conn
+
+    def _get_title_connection(self):
+        conn = getattr(self._local, "title_conn", None)
+        if conn is None:
+            conn = sqlite3.connect(
+                f"file:{self.title_db_path}?mode=ro",
+                uri=True,
+                check_same_thread=False,
+                timeout=30.0,
+            )
+            try:
+                conn.execute("PRAGMA query_only=ON")
+            except Exception:
+                pass
+            self._local.title_conn = conn
+        return conn
 
     def _ensure_titles_table(self):
         cursor = self.title_connection.cursor()
@@ -53,22 +87,66 @@ class LongWikiDB(DocDB):
             self.title_connection.commit()
         cursor.close()
 
-    def get_relevant_titles(self, entity: str):
-        cursor = self.title_connection.cursor()
+    def get_relevant_titles(self, entity: str, limit: int = 0, mode: str = "contains"):
+        conn = self._get_title_connection()
+        cursor = conn.cursor()
         entity = entity.replace("'", "''")
-        cursor.execute("SELECT title_name FROM titles WHERE title_name LIKE ?", ('%' + entity + '%',))
+        if mode == "exact":
+            query = "SELECT title_name FROM titles WHERE title_name = ?"
+            params = (entity,)
+        elif mode == "prefix":
+            query = "SELECT title_name FROM titles WHERE title_name LIKE ?"
+            params = (entity + "%",)
+        else:
+            query = "SELECT title_name FROM titles WHERE title_name LIKE ?"
+            params = ("%" + entity + "%",)
+        if limit and limit > 0:
+            query += " LIMIT ?"
+            params = params + (limit,)
+        cursor.execute(query, params)
         results = cursor.fetchall()
         cursor.close()
         results = [r[0] for r in results]
         return results
     
     def get_whole_passages(self):
-        cursor = self.connection.cursor()
+        conn = self._get_doc_connection()
+        cursor = conn.cursor()
         cursor.execute("SELECT title, text FROM documents")
         results = cursor.fetchall()
         results = [r for r in results]
         results = [{"title": r[0], "text": para} for r in results for para in r[1].split(self.SPECIAL_SEPARATOR)]
         return results
+
+    def get_text_from_title(self, title):
+        conn = self._get_doc_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT text FROM documents WHERE title = ?", (title,))
+        results = cursor.fetchall()
+        cursor.close()
+        if not results or len(results) != 1:
+            raise KeyError(title)
+        results = [{"title": title, "text": para} for para in results[0][0].split(self.SPECIAL_SEPARATOR)]
+        if not results:
+            raise KeyError(title)
+        return results
+
+    def get_texts_from_titles(self, titles: List[str]):
+        if not titles:
+            return {}
+        conn = self._get_doc_connection()
+        cursor = conn.cursor()
+        placeholders = ",".join(["?"] * len(titles))
+        cursor.execute(
+            f"SELECT title, text FROM documents WHERE title IN ({placeholders})",
+            titles,
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        out = {}
+        for title, text in rows:
+            out[title] = [{"title": title, "text": para} for para in text.split(self.SPECIAL_SEPARATOR)]
+        return out
     
 
 class LongWikiRetrieval(object):
@@ -83,11 +161,26 @@ class LongWikiRetrieval(object):
         self.retrieval_type = retrieval_type
         self.batch_size = batch_size
         self.page_cache_size = int(os.getenv("RETRIEVAL_PAGE_CACHE_SIZE", "1024"))
+        self.db_fetch_batch_titles = int(os.getenv("RETRIEVAL_DB_BATCH_TITLES", "128"))
         self.page_cache = OrderedDict() if self.page_cache_size > 0 else None
         self.page_cache_lock = threading.Lock()
         self.embed_cache_lock = threading.Lock()
         self.encoder_lock = threading.Lock()
         self.not_existing_pages_lock = threading.Lock()
+        self.embed_cache_save_every = int(os.getenv("EMBED_CACHE_SAVE_EVERY", "50"))
+        self.embed_cache_dirty = 0
+        embed_write_env = os.getenv("EMBED_CACHE_WRITE", "true")
+        self.embed_cache_write = str(embed_write_env).lower() not in ("0", "false", "no")
+        cache_write_env = os.getenv("RETRIEVAL_CACHE_WRITE", "true")
+        self.cache_write = str(cache_write_env).lower() not in ("0", "false", "no")
+        use_ner_env = os.getenv("RETRIEVAL_USE_NER", "true")
+        self.use_ner = str(use_ner_env).lower() not in ("0", "false", "no")
+        use_relevant_env = os.getenv("RETRIEVAL_USE_RELEVANT_TITLES", "true")
+        self.use_relevant_titles = str(use_relevant_env).lower() not in ("0", "false", "no")
+        self.max_ners = int(os.getenv("RETRIEVAL_MAX_NER", "0"))
+        self.min_ner_len = int(os.getenv("RETRIEVAL_MIN_NER_LEN", "0"))
+        self.max_titles_per_ner = int(os.getenv("RETRIEVAL_MAX_TITLES_PER_NER", "0"))
+        self.title_match_mode = os.getenv("RETRIEVAL_TITLE_MATCH_MODE", "contains").lower()
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         pipeline_device = 0 if device == "cuda" else -1
@@ -143,17 +236,18 @@ class LongWikiRetrieval(object):
         self.cache = Cache(self.cache_path)
 
     
-    def save_cache(self, updated: bool = False):
-        if not updated:
+    def _save_embed_cache(self):
+        if not self.embed_cache_write:
             return
         with self.embed_cache_lock:
-            if os.path.exists(self.embed_cache_path):
-                with open(self.embed_cache_path, "rb") as f:
-                    new_cache = pkl.load(f)
-                self.embed_cache.update(new_cache)
-                
             with open(self.embed_cache_path, "wb") as f:
                 pkl.dump(self.embed_cache, f)
+
+    def flush_embed_cache(self):
+        if self.embed_cache_dirty <= 0:
+            return
+        self._save_embed_cache()
+        self.embed_cache_dirty = 0
 
     def _get_cached_passages(self, title: str):
         if self.page_cache is None:
@@ -176,24 +270,56 @@ class LongWikiRetrieval(object):
                 if self.encoder is None:
                     self.load_encoder()
 
-        updated = False
-        passage_vectors_list = []
+        ordered_titles = []
         passages_all = []
+        missing_titles = []
+        missing_inputs = []
+        missing_slices = []
 
-        for topic, passages in key_passages.items():
+        for title, passages in key_passages.items():
+            ordered_titles.append(title)
             passages_all.extend(passages)
 
             with self.embed_cache_lock:
-                passage_vectors = self.embed_cache.get(topic)
+                passage_vectors = self.embed_cache.get(title)
             if passage_vectors is None:
-                inputs = [psg["title"] + " " + psg["text"].replace("<s>", "").replace("</s>", "") for psg in passages]
-                with self.encoder_lock:
-                    passage_vectors = self.encoder.encode(inputs, batch_size=self.batch_size, device=self.encoder.device)
-                with self.embed_cache_lock:
-                    self.embed_cache[topic] = passage_vectors
-                updated = True
+                inputs = [
+                    psg["title"]
+                    + " "
+                    + psg["text"].replace("<s>", "").replace("</s>", "")
+                    for psg in passages
+                ]
+                if not inputs:
+                    continue
+                start = len(missing_inputs)
+                missing_inputs.extend(inputs)
+                end = len(missing_inputs)
+                missing_titles.append(title)
+                missing_slices.append((start, end))
 
-            passage_vectors_list.append(passage_vectors)
+        if missing_titles:
+            with self.encoder_lock:
+                encoded = self.encoder.encode(
+                    missing_inputs,
+                    batch_size=self.batch_size,
+                    device=self.encoder.device,
+                )
+            with self.embed_cache_lock:
+                for title, (start, end) in zip(missing_titles, missing_slices):
+                    self.embed_cache[title] = encoded[start:end]
+            self.embed_cache_dirty += len(missing_titles)
+            if self.embed_cache_save_every > 0 and self.embed_cache_dirty >= self.embed_cache_save_every:
+                self._save_embed_cache()
+                self.embed_cache_dirty = 0
+
+        passage_vectors_list = []
+        with self.embed_cache_lock:
+            for title in ordered_titles:
+                vec = self.embed_cache.get(title)
+                if vec is None:
+                    # Should not happen; keep alignment between passages and vectors.
+                    return []
+                passage_vectors_list.append(vec)
 
         if not passage_vectors_list:
             return []
@@ -215,9 +341,6 @@ class LongWikiRetrieval(object):
         
         scores = np.inner(query_vectors, passage_vectors_all)
         indices = np.argsort(-scores)[:k]
-
-        if updated:
-            self.save_cache(updated=True)
 
         return [passages_all[i] for i in indices]
 
@@ -257,17 +380,40 @@ class LongWikiRetrieval(object):
         
         # Using NER to get named entities from question
         ners, ner_relevant_titles = [], []
-        ners = self.Q_NER_cache.get_item(question)
-        for ner in ners:
-            pgs_selected = self.relevant_pages_cache.get_item(ner)
-            if pgs_selected:
-                pgs = pgs_selected
-            else:
-                pgs = self.db.get_relevant_titles(ner)
-                if not pgs: 
+        if self.use_ner:
+            ners = self.Q_NER_cache.get_item(question) or []
+            # Dedup while preserving order
+            seen = set()
+            filtered = []
+            for ner in ners:
+                if self.min_ner_len and len(ner) < self.min_ner_len:
                     continue
-                self.relevant_pages_cache.set_item(ner, pgs)
-            ner_relevant_titles += [pg for pg in pgs if ((pg.lower() in claim.lower()) or (pg.lower() in question.lower()))]
+                if ner in seen:
+                    continue
+                seen.add(ner)
+                filtered.append(ner)
+                if self.max_ners and len(filtered) >= self.max_ners:
+                    break
+            ners = filtered
+            if self.use_relevant_titles and ners:
+                for ner in ners:
+                    pgs_selected = self.relevant_pages_cache.get_item(ner)
+                    if pgs_selected:
+                        pgs = pgs_selected
+                    else:
+                        pgs = self.db.get_relevant_titles(
+                            ner,
+                            limit=self.max_titles_per_ner,
+                            mode=self.title_match_mode,
+                        )
+                        if not pgs:
+                            continue
+                        self.relevant_pages_cache.set_item(ner, pgs)
+                    ner_relevant_titles += [
+                        pg
+                        for pg in pgs
+                        if ((pg.lower() in claim.lower()) or (pg.lower() in question.lower()))
+                    ]
         
         # Get all relevant pages
         combined = [topic] + ner_relevant_titles + ners
@@ -275,23 +421,58 @@ class LongWikiRetrieval(object):
 
         # get all passages
         key_passages = {}
+        to_fetch = []
         for title in all_related_pages:
             title = title.replace("_", " ")
             with self.not_existing_pages_lock:
                 if title in self.not_existing_pages:
                     continue
-            try:
-                pages = self._get_cached_passages(title)
-                key_passages[title] = pages
-            except:
+            if self.page_cache is not None:
+                with self.page_cache_lock:
+                    cached = self.page_cache.get(title)
+                    if cached is not None:
+                        self.page_cache.move_to_end(title)
+                        key_passages[title] = cached
+                        continue
+            to_fetch.append(title)
+
+        if to_fetch:
+            # Batch DB reads to reduce per-title cursor overhead.
+            batch_n = min(900, max(1, self.db_fetch_batch_titles))
+            fetched = {}
+            for i in range(0, len(to_fetch), batch_n):
+                chunk = to_fetch[i : i + batch_n]
+                try:
+                    fetched.update(self.db.get_texts_from_titles(chunk))
+                except Exception:
+                    # Fall back to per-title fetch for unexpected DB errors.
+                    for t in chunk:
+                        try:
+                            fetched[t] = self.db.get_text_from_title(t)
+                        except Exception:
+                            pass
+
+            if self.page_cache is not None and fetched:
+                with self.page_cache_lock:
+                    for t, pages in fetched.items():
+                        self.page_cache[t] = pages
+                        self.page_cache.move_to_end(t)
+                        if len(self.page_cache) > self.page_cache_size:
+                            self.page_cache.popitem(last=False)
+
+            for t, pages in fetched.items():
+                key_passages[t] = pages
+
+            missing = set(to_fetch) - set(fetched.keys())
+            if missing:
                 with self.not_existing_pages_lock:
-                    self.not_existing_pages.add(title)
-                continue
+                    self.not_existing_pages.update(missing)
         
         top_k_related_passages = self.get_topk_passages(
             topic, retrieval_query, key_passages, k, query_vector=query_vector
         )
-        self.cache.set_item(cache_key, top_k_related_passages)
+        if self.cache_write:
+            self.cache.set_item(cache_key, top_k_related_passages)
 
         self.add_n += 1
         return top_k_related_passages
