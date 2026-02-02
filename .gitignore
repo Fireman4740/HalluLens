@@ -16,4 +16,8 @@ data/precise_qa
 
 debug.ipynb
 .env
+.DS_Store
 
+# local caches / generated artifacts
+\# optional cache dir/
+output/
