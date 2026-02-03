@@ -1,0 +1,1 @@
+{"output_csv": "output/longwiki-hybrid/grok-3-mini__static_prompts_len50_mgrok-3-mini_t0.0/output.csv", "abstain_evaluator": "xiaomi/mimo-v2-flash", "claim_extractor": "xiaomi/mimo-v2-flash", "verifier": "xiaomi/mimo-v2-flash", "k": 32, "evalauted_model": "grok-3-mini", "exp_mode": "hybrid", "eval_time": "2026-02-02 22:53:54.477192"}

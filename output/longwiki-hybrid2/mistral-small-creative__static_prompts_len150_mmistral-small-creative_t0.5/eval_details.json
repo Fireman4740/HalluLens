@@ -1,0 +1,1 @@
+{"output_csv": "output/longwiki-hybrid/mistral-small-creative__static_prompts_len150_mmistral-small-creative_t0.5/output.csv", "abstain_evaluator": "xiaomi/mimo-v2-flash", "claim_extractor": "xiaomi/mimo-v2-flash", "verifier": "xiaomi/mimo-v2-flash", "k": 32, "evalauted_model": "mistral-small-creative", "exp_mode": "hybrid", "eval_time": "2026-02-02 17:46:51.130995"}

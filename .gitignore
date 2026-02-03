@@ -20,4 +20,4 @@ debug.ipynb
 
 # local caches / generated artifacts
 \# optional cache dir/
-output/
+cache/

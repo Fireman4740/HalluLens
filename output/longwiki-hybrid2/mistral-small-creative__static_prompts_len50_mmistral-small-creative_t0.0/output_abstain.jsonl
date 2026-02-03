@@ -1,0 +1,30 @@
+{"eval_res": "```json\n{\n  \"is_knowledgeable\": false\n}\n```"}
+{"eval_res": "```json\n{\n  \"is_knowledgeable\": true\n}\n```"}
+{"eval_res": "```json\n{\n  \"is_knowledgeable\": true\n}\n```"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "```json\n{\"is_knowledgeable\": true}\n```"}
+{"eval_res": "{\"is_knowledgeable\": false}"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "```json\n{\n  \"is_knowledgeable\": true\n}\n```"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "```json\n{\n  \"is_knowledgeable\": true\n}\n```"}
+{"eval_res": "```json\n{\n  \"is_knowledgeable\": true\n}\n```"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "```json\n{\"is_knowledgeable\": true}\n```"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "```json\n{\n  \"is_knowledgeable\": true\n}\n```"}
+{"eval_res": "{\"is_knowledgeable\": false}"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "```json\n{\n  \"is_knowledgeable\": false\n}\n```"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
+{"eval_res": "```json\n{\"is_knowledgeable\": true}\n```"}
+{"eval_res": "{\"is_knowledgeable\": true}"}
