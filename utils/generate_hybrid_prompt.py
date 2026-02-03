@@ -76,6 +76,11 @@ from utils.prompt_lego_blocks import (
     check_banned_phrases,
 )
 
+# Default regex to detect person pages from categories.
+# Heuristic: Wikipedia person pages almost always include "births"/"deaths"
+# or "Living people" categories.
+PERSON_CATEGORY_REGEX = re.compile(r"\b(births|deaths)\b|Living people", re.IGNORECASE)
+
 
 # ==============================================================================
 # PROMPT ASSEMBLERS
@@ -103,6 +108,119 @@ def make_naturalize_prompt(spec: PromptSpec, blueprint: dict) -> str:
         creativity_style=CREATIVITY_STYLE[spec.creativity_level].strip(),
         schema=FINAL_PROMPT_SCHEMA_DESC,
     )
+
+
+# ==============================================================================
+# SUBJECT SELECTION UTILITIES
+# ==============================================================================
+
+
+def _is_person(categories: Any, person_regex: re.Pattern = PERSON_CATEGORY_REGEX) -> bool:
+    if not categories:
+        return False
+    if not isinstance(categories, (list, tuple)):
+        return False
+    return any(person_regex.search(str(cat)) for cat in categories)
+
+
+def _sample_df(df: pd.DataFrame, n: int, seed: Optional[int] = None) -> pd.DataFrame:
+    if n <= 0 or df.empty:
+        return df.head(0)
+    if n >= len(df):
+        return df.copy()
+    return df.sample(n=n, random_state=seed)
+
+
+def _select_subjects_known_and_niche(
+    wiki_data_all: pd.DataFrame,
+    n_subjects: int,
+    known_person_ratio: float,
+    known_h_score_min: int,
+    niche_h_score_max: int,
+    seed: Optional[int],
+    person_regex: re.Pattern = PERSON_CATEGORY_REGEX,
+    exclude_person_from_niche: bool = True,
+) -> pd.DataFrame:
+    if n_subjects <= 0:
+        return wiki_data_all.head(0)
+
+    # Compute person mask once
+    person_mask = wiki_data_all["categories"].apply(
+        lambda cats: _is_person(cats, person_regex)
+    )
+
+    known_pool = wiki_data_all[
+        person_mask & (wiki_data_all["h_score_cat"] >= known_h_score_min)
+    ]
+
+    if exclude_person_from_niche:
+        niche_pool = wiki_data_all[
+            (~person_mask) & (wiki_data_all["h_score_cat"] <= niche_h_score_max)
+        ]
+    else:
+        niche_pool = wiki_data_all[
+            wiki_data_all["h_score_cat"] <= niche_h_score_max
+        ]
+
+    ratio = max(0.0, min(1.0, float(known_person_ratio)))
+    known_target = int(round(n_subjects * ratio))
+    known_target = min(known_target, n_subjects)
+    niche_target = n_subjects - known_target
+
+    selected = []
+
+    known_pick = _sample_df(
+        known_pool, min(known_target, len(known_pool)), None if seed is None else seed + 1
+    )
+    selected.append(known_pick)
+    selected_titles = set(known_pick["title"].tolist())
+
+    niche_pool = niche_pool[~niche_pool["title"].isin(selected_titles)]
+    niche_pick = _sample_df(
+        niche_pool, min(niche_target, len(niche_pool)), None if seed is None else seed + 2
+    )
+    selected.append(niche_pick)
+    selected_titles.update(niche_pick["title"].tolist())
+
+    remaining = n_subjects - len(selected_titles)
+    if remaining > 0:
+        fallback_pool = wiki_data_all[~wiki_data_all["title"].isin(selected_titles)]
+        fallback_pick = _sample_df(
+            fallback_pool, remaining, None if seed is None else seed + 3
+        )
+        selected.append(fallback_pick)
+
+    return pd.concat(selected, ignore_index=True)
+
+
+def _select_subjects_by_strategy(
+    wiki_data_all: pd.DataFrame,
+    n_subjects: int,
+    low_level: int,
+    high_level: int,
+    strategy: str,
+    seed: Optional[int],
+    known_person_ratio: float,
+    known_h_score_min: int,
+    niche_h_score_max: int,
+) -> pd.DataFrame:
+    strategy = (strategy or "default").strip().lower()
+    if strategy in {"known_and_niche", "known-niche", "known_niche"}:
+        return _select_subjects_known_and_niche(
+            wiki_data_all=wiki_data_all,
+            n_subjects=n_subjects,
+            known_person_ratio=known_person_ratio,
+            known_h_score_min=known_h_score_min,
+            niche_h_score_max=niche_h_score_max,
+            seed=seed,
+        )
+
+    # Default: sample within [low_level, high_level) bins
+    level_mask = (wiki_data_all["h_score_cat"] >= low_level) & (
+        wiki_data_all["h_score_cat"] < high_level
+    )
+    pool = wiki_data_all[level_mask]
+    return _sample_df(pool, n_subjects, seed)
 
 
 # ==============================================================================
@@ -655,6 +773,11 @@ def hybrid_prompt_generation_run_batch(
     lm_studio_model: Optional[str] = None,
     max_workers: int = 1,
     seed: Optional[int] = None,
+    group_tasks_by_subject: bool = False,
+    subject_strategy: str = "default",
+    known_person_ratio: float = 0.5,
+    known_h_score_min: int = 8,
+    niche_h_score_max: int = 2,
 ) -> List[dict]:
     """
     Main batch generation function matching the signature of longform_QA_generation_run_batch.
@@ -672,6 +795,11 @@ def hybrid_prompt_generation_run_batch(
         length_words: Target word count
         lm_studio_url: Optional LM Studio URL
         lm_studio_model: Optional LM Studio model name
+        group_tasks_by_subject: If True, generate all task/creativity combos per subject.
+        subject_strategy: Subject sampling strategy (default | known_and_niche).
+        known_person_ratio: Fraction of subjects that should be known persons (0-1).
+        known_h_score_min: Minimum h_score_cat for known persons.
+        niche_h_score_max: Maximum h_score_cat for niche subjects.
 
     Returns:
         List of generated prompts in longwiki format
@@ -728,6 +856,104 @@ def hybrid_prompt_generation_run_batch(
     creativity_list = [
         CreativityLevel(c.upper()) for c in (creativity_levels or default_creativity)
     ]
+
+    # Grouped generation: keep the same subject across tasks/creativity combos
+    if group_tasks_by_subject:
+        combos = len(task_list) * len(creativity_list)
+        if combos == 0:
+            print("Warning: No tasks/creativity provided; skipping generation.")
+            return existing_results[:N]
+
+        if existing_results:
+            print(
+                "Note: group_tasks_by_subject enabled; regenerating prompts "
+                "to preserve subject grouping."
+            )
+
+        target_total = N
+        if N % combos != 0:
+            adjusted = (N // combos) * combos
+            if adjusted == 0:
+                adjusted = combos
+            print(
+                "Warning: N={} not divisible by task/creativity combos ({}). "
+                "Using {} to keep full subject groups.".format(N, combos, adjusted)
+            )
+            target_total = adjusted
+
+        subjects_needed = max(1, target_total // combos)
+        subject_rows = _select_subjects_by_strategy(
+            wiki_data_all=wiki_data_all,
+            n_subjects=subjects_needed,
+            low_level=low_level,
+            high_level=high_level,
+            strategy=subject_strategy,
+            seed=seed,
+            known_person_ratio=known_person_ratio,
+            known_h_score_min=known_h_score_min,
+            niche_h_score_max=niche_h_score_max,
+        )
+
+        if subject_rows.empty:
+            print("Warning: No subjects selected; returning existing prompts.")
+            return existing_results[:N]
+
+        if len(subject_rows) < subjects_needed:
+            subjects_needed = len(subject_rows)
+            target_total = subjects_needed * combos
+            print(
+                f"Warning: Only {subjects_needed} subjects available; "
+                f"reducing total prompts to {target_total}."
+            )
+
+        work_items = []
+        for _, row in subject_rows.iterrows():
+            for task in task_list:
+                for creativity in creativity_list:
+                    work_items.append(
+                        {
+                            "row": row.to_dict(),
+                            "task": task,
+                            "creativity": creativity,
+                            "length_words": length_words,
+                        }
+                    )
+
+        def generate_one(item):
+            try:
+                return generator.generate_single_for_longwiki(
+                    wiki_row=item["row"],
+                    task=item["task"],
+                    creativity_level=item["creativity"],
+                    length_words=item["length_words"],
+                )
+            except Exception as e:
+                print(f"Error generating prompt: {e}")
+                return None
+
+        if config.max_workers > 1:
+            grouped_results = thread_map(
+                generate_one,
+                work_items,
+                max_workers=config.max_workers,
+                desc=f"Generating grouped prompts with {generator.model}",
+            )
+        else:
+            grouped_results = []
+            for item in tqdm(work_items, desc="Generating grouped prompts"):
+                grouped_results.append(generate_one(item))
+
+        all_results = [r for r in grouped_results if r is not None]
+
+        if output_path:
+            output_dir = Path(output_path).parent
+            output_dir.mkdir(parents=True, exist_ok=True)
+            with jsonlines.open(output_path, "w") as writer:
+                for r in all_results[:target_total]:
+                    writer.write(r)
+
+        print(f"\nFinished. Total prompts: {len(all_results)}")
+        return all_results[:target_total]
 
     # Calculate per-bin count
     n_bins = high_level - low_level
@@ -847,6 +1073,35 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip LLM naturalization and output a deterministic prompt template",
     )
+    parser.add_argument(
+        "--group_tasks_by_subject",
+        action="store_true",
+        help="Generate all task/creativity combos per subject (keeps tasks on same subject).",
+    )
+    parser.add_argument(
+        "--subject_strategy",
+        type=str,
+        default="default",
+        help="Subject sampling strategy: default | known_and_niche",
+    )
+    parser.add_argument(
+        "--known_person_ratio",
+        type=float,
+        default=0.5,
+        help="Fraction of subjects that should be known persons (0-1).",
+    )
+    parser.add_argument(
+        "--known_h_score_min",
+        type=int,
+        default=8,
+        help="Minimum h_score_cat for known persons.",
+    )
+    parser.add_argument(
+        "--niche_h_score_max",
+        type=int,
+        default=2,
+        help="Maximum h_score_cat for niche subjects.",
+    )
     parser.add_argument("--low_level", type=int, default=5, help="Minimum h_score_cat")
     parser.add_argument(
         "--high_level", type=int, default=10, help="Maximum h_score_cat"
@@ -881,6 +1136,11 @@ if __name__ == "__main__":
         lm_studio_url=args.lm_studio_url,
         lm_studio_model=args.lm_studio_model,
         seed=args.seed,
+        group_tasks_by_subject=args.group_tasks_by_subject,
+        subject_strategy=args.subject_strategy,
+        known_person_ratio=args.known_person_ratio,
+        known_h_score_min=args.known_h_score_min,
+        niche_h_score_max=args.niche_h_score_max,
     )
 
     print(f"\nGenerated {len(results)} prompts")

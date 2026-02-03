@@ -214,6 +214,11 @@ def save_run_config(args, qa_output_path: str):
         "LOW_LEVEL": os.getenv("LOW_LEVEL"),
         "HIGH_LEVEL": os.getenv("HIGH_LEVEL"),
         "STATIC_USER_PROMPT": os.getenv("STATIC_USER_PROMPT"),
+        "GROUP_TASKS_BY_SUBJECT": os.getenv("GROUP_TASKS_BY_SUBJECT"),
+        "SUBJECT_STRATEGY": os.getenv("SUBJECT_STRATEGY"),
+        "KNOWN_PERSON_RATIO": os.getenv("KNOWN_PERSON_RATIO"),
+        "KNOWN_H_SCORE_MIN": os.getenv("KNOWN_H_SCORE_MIN"),
+        "NICHE_H_SCORE_MAX": os.getenv("NICHE_H_SCORE_MAX"),
         "K": os.getenv("K"),
         "EVAL_CACHE_PATH": os.getenv("EVAL_CACHE_PATH"),
     }
@@ -363,6 +368,35 @@ if __name__ == "__main__":
         help="Use deterministic prompt template for hybrid prompt generation",
     )
     parser.add_argument(
+        "--group_tasks_by_subject",
+        action="store_true",
+        help="Generate all task/creativity combos per subject (keeps tasks on same subject).",
+    )
+    parser.add_argument(
+        "--subject_strategy",
+        type=str,
+        default="default",
+        help="Subject sampling strategy: default | known_and_niche",
+    )
+    parser.add_argument(
+        "--known_person_ratio",
+        type=float,
+        default=0.5,
+        help="Fraction of subjects that should be known persons (0-1).",
+    )
+    parser.add_argument(
+        "--known_h_score_min",
+        type=int,
+        default=8,
+        help="Minimum h_score_cat for known persons.",
+    )
+    parser.add_argument(
+        "--niche_h_score_max",
+        type=int,
+        default=5,
+        help="Maximum h_score_cat for niche subjects.",
+    )
+    parser.add_argument(
         "--low_level",
         type=int,
         default=5,
@@ -463,6 +497,11 @@ if __name__ == "__main__":
                     static_user_prompt=args.static_user_prompt,
                     max_workers=args.prompt_max_workers,
                     seed=args.prompt_seed,
+                    group_tasks_by_subject=args.group_tasks_by_subject,
+                    subject_strategy=args.subject_strategy,
+                    known_person_ratio=args.known_person_ratio,
+                    known_h_score_min=args.known_h_score_min,
+                    niche_h_score_max=args.niche_h_score_max,
                 )
                 all_prompts = pd.DataFrame(QAs)
                 print(f"Generated {len(all_prompts)} hybrid prompts")

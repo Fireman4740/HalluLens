@@ -92,6 +92,19 @@ PROMPT_SEED="${PROMPT_SEED:-42}"
 
 LOW_LEVEL="${LOW_LEVEL:-5}"
 HIGH_LEVEL="${HIGH_LEVEL:-10}"
+SUBJECT_STRATEGY="${SUBJECT_STRATEGY:-known_and_niche}"
+KNOWN_PERSON_RATIO="${KNOWN_PERSON_RATIO:-0.5}"
+KNOWN_H_SCORE_MIN="${KNOWN_H_SCORE_MIN:-8}"
+NICHE_H_SCORE_MAX="${NICHE_H_SCORE_MAX:-2}"
+
+GROUP_TASKS_BY_SUBJECT="${GROUP_TASKS_BY_SUBJECT:-}"
+if [[ -z "${GROUP_TASKS_BY_SUBJECT}" ]]; then
+  if [[ "${STATIC_USER_PROMPT}" == "true" ]]; then
+    GROUP_TASKS_BY_SUBJECT="true"
+  else
+    GROUP_TASKS_BY_SUBJECT="false"
+  fi
+fi
 K="${K:-32}"
 
 PROMPT_MODEL_TAG="${PROMPT_MODEL_TAG:-promptset}"
@@ -141,6 +154,23 @@ fi
 CACHE_NAMESPACE_ARGS=()
 if [[ -n "${CACHE_NAMESPACE:-}" ]]; then
   CACHE_NAMESPACE_ARGS+=(--cache_namespace "${CACHE_NAMESPACE}")
+fi
+
+SUBJECT_ARGS=()
+if [[ -n "${SUBJECT_STRATEGY:-}" ]]; then
+  SUBJECT_ARGS+=(--subject_strategy "${SUBJECT_STRATEGY}")
+fi
+if [[ -n "${KNOWN_PERSON_RATIO:-}" ]]; then
+  SUBJECT_ARGS+=(--known_person_ratio "${KNOWN_PERSON_RATIO}")
+fi
+if [[ -n "${KNOWN_H_SCORE_MIN:-}" ]]; then
+  SUBJECT_ARGS+=(--known_h_score_min "${KNOWN_H_SCORE_MIN}")
+fi
+if [[ -n "${NICHE_H_SCORE_MAX:-}" ]]; then
+  SUBJECT_ARGS+=(--niche_h_score_max "${NICHE_H_SCORE_MAX}")
+fi
+if [[ "${GROUP_TASKS_BY_SUBJECT}" == "true" ]]; then
+  SUBJECT_ARGS+=(--group_tasks_by_subject)
 fi
 
 prompt_file_for() {
@@ -209,6 +239,7 @@ generate_prompts_for_length() {
     "${STATIC_ARGS[@]}" \
     "${TASKS_ARGS[@]}" \
     "${CREATIVITY_ARGS[@]}" \
+    "${SUBJECT_ARGS[@]}" \
     "${LM_STUDIO_ARGS[@]}" 1>&2
 
   if [[ ! -f "${prompt_file}" ]]; then
@@ -281,6 +312,7 @@ run_inference_eval() {
     "${STATIC_ARGS[@]}" \
     "${TASKS_ARGS[@]}" \
     "${CREATIVITY_ARGS[@]}" \
+    "${SUBJECT_ARGS[@]}" \
     "${LM_STUDIO_ARGS[@]}" \
     "${EVAL_CACHE_ARGS[@]}" \
     "${CACHE_NAMESPACE_ARGS[@]}"
