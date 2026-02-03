@@ -173,10 +173,23 @@ generate_prompts_for_length() {
   local prompt_file
   prompt_file="$(prompt_file_for "${run_ns}")"
 
-  if [[ -f "${prompt_file}" && "${FORCE_REGEN}" != "true" ]]; then
-    echo "Using existing prompts: ${prompt_file}" >&2
-    printf '%s\n' "${prompt_file}"
-    return 0
+  if [[ -f "${prompt_file}" ]]; then
+    local existing_count
+    existing_count="$(wc -l < "${prompt_file}" | tr -d '[:space:]' || echo 0)"
+
+    if [[ "${FORCE_REGEN}" == "true" ]]; then
+      local bak="${prompt_file}.bak_$(date +%Y%m%d_%H%M%S)"
+      echo "FORCE_REGEN=true: backing up existing prompts to ${bak}" >&2
+      mv -f "${prompt_file}" "${bak}"
+    elif [[ "${existing_count}" -ge "${N}" ]]; then
+      echo "Using existing prompts: ${prompt_file}" >&2
+      printf '%s\n' "${prompt_file}"
+      return 0
+    else
+      local bak="${prompt_file}.bak_$(date +%Y%m%d_%H%M%S)"
+      echo "Warning: existing prompts file has ${existing_count} prompts, expected ${N}. Regenerating (backup: ${bak})." >&2
+      mv -f "${prompt_file}" "${bak}"
+    fi
   fi
 
   echo "Generating prompts (len=${length}, static=${STATIC_USER_PROMPT}, seed=${PROMPT_SEED})" >&2
@@ -215,9 +228,24 @@ run_inference_eval() {
   local qa_path
   qa_path="$(qa_path_for "${model}" "${run_ns}")"
 
-  if [[ ! -f "${qa_path}" ]]; then
-    mkdir -p "$(dirname "${qa_path}")"
-    cp -f "$4" "${qa_path}"
+  local prompts_src="$4"
+  mkdir -p "$(dirname "${qa_path}")"
+  if [[ -f "${qa_path}" ]]; then
+    local qa_count
+    qa_count="$(wc -l < "${qa_path}" | tr -d '[:space:]' || echo 0)"
+    if [[ "${FORCE_REGEN}" == "true" ]]; then
+      local bak="${qa_path}.bak_$(date +%Y%m%d_%H%M%S)"
+      echo "FORCE_REGEN=true: backing up existing QA prompts to ${bak}" >&2
+      mv -f "${qa_path}" "${bak}"
+      cp -f "${prompts_src}" "${qa_path}"
+    elif [[ "${qa_count}" -lt "${N}" ]]; then
+      local bak="${qa_path}.bak_$(date +%Y%m%d_%H%M%S)"
+      echo "Warning: QA prompts file has ${qa_count} prompts, expected ${N}. Refreshing from ${prompts_src} (backup: ${bak})." >&2
+      mv -f "${qa_path}" "${bak}"
+      cp -f "${prompts_src}" "${qa_path}"
+    fi
+  else
+    cp -f "${prompts_src}" "${qa_path}"
   fi
 
   local args=(

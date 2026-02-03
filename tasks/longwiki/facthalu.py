@@ -99,6 +99,9 @@ class FactHalu:
         self.generations = None
         self.db = LongWikiDB(db_path=db_path)
 
+        eval_cache_path = (eval_cache_path or "").strip()
+        if not eval_cache_path or eval_cache_path.startswith("#"):
+            eval_cache_path = "data/longwiki/.cache"
         self.CACHE_BASE_PATH = eval_cache_path  # used for retrieval cache
         self.embedded_cache_path = (
             f"{self.CACHE_BASE_PATH}/embedding/embed_cache_all.pkl"

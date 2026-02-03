@@ -39,6 +39,14 @@ except ModuleNotFoundError:
 
 TASKNAME = "longwiki"
 
+def _clean_env_value(value):
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned or cleaned.startswith("#"):
+        return None
+    return cleaned
+
 def _slug(value: str) -> str:
     value = value or "default"
     value = re.sub(r"[^a-zA-Z0-9._-]+", "_", value)
@@ -82,12 +90,13 @@ def _resolve_run_namespace(args, model_name: str) -> str:
     return _slug(namespace)
 
 def _resolve_eval_cache_path(args, base_path: str, model_name: str) -> str:
+    eval_cache_path = _clean_env_value(args.eval_cache_path)
     cache_root = (
         f"{base_path}/data/longwiki/.cache"
-        if args.eval_cache_path is None
-        else args.eval_cache_path
+        if eval_cache_path is None
+        else eval_cache_path
     )
-    namespace = args.cache_namespace
+    namespace = _clean_env_value(args.cache_namespace) or "auto"
     if namespace == "none":
         return cache_root
     if namespace == "auto":
