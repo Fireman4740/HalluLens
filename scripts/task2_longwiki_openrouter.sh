@@ -125,33 +125,54 @@ if [[ -n "${CACHE_NAMESPACE}" ]]; then
   CACHE_NAMESPACE_ARGS+=(--cache_namespace "${CACHE_NAMESPACE}")
 fi
 
-python -m tasks.longwiki.longwiki_main \
-  --exp_mode "${EXP_MODE}" \
-  --do_generate_prompt \
-  --do_inference \
-  --do_eval \
-  --model "${MODEL_RESPONSE}" \
-  --q_generator "${MODEL_PROMPT}" \
-  --abstain_evaluator "${ABSTAIN_EVALUATOR}" \
-  --claim_extractor "${CLAIM_EXTRACTOR}" \
-  --verifier "${VERIFIER}" \
-  --db_path "${DB_PATH}" \
-  --N "${N}" \
-  --k "${K}" \
-  --temperature "${TEMPERATURE}" \
-  --max_tokens "${MAX_TOKENS}" \
-  --max_workers "${MAX_WORKERS}" \
-  --prompt_max_workers "${PROMPT_MAX_WORKERS}" \
-  --eval_max_workers "${EVAL_MAX_WORKERS}" \
-  --length_words "${LENGTH_WORDS}" \
-  --low_level "${LOW_LEVEL}" \
-  --high_level "${HIGH_LEVEL}" \
-  --inference_method "${INFERENCE_METHOD}" \
-  "${STATIC_ARGS[@]}" \
-  "${TASKS_ARGS[@]}" \
-  "${CREATIVITY_ARGS[@]}" \
-  "${LM_STUDIO_ARGS[@]}" \
-  "${EVAL_CACHE_ARGS[@]}" \
-  "${RUN_NAMESPACE_ARGS[@]}" \
-  "${OUTPUT_SUFFIX_ARGS[@]}" \
-  "${CACHE_NAMESPACE_ARGS[@]}"
+PY_ARGS=(
+  -m tasks.longwiki.longwiki_main
+  --exp_mode "${EXP_MODE}"
+  --do_generate_prompt
+  --do_inference
+  --do_eval
+  --model "${MODEL_RESPONSE}"
+  --q_generator "${MODEL_PROMPT}"
+  --abstain_evaluator "${ABSTAIN_EVALUATOR}"
+  --claim_extractor "${CLAIM_EXTRACTOR}"
+  --verifier "${VERIFIER}"
+  --db_path "${DB_PATH}"
+  --N "${N}"
+  --k "${K}"
+  --temperature "${TEMPERATURE}"
+  --max_tokens "${MAX_TOKENS}"
+  --max_workers "${MAX_WORKERS}"
+  --prompt_max_workers "${PROMPT_MAX_WORKERS}"
+  --eval_max_workers "${EVAL_MAX_WORKERS}"
+  --length_words "${LENGTH_WORDS}"
+  --low_level "${LOW_LEVEL}"
+  --high_level "${HIGH_LEVEL}"
+  --inference_method "${INFERENCE_METHOD}"
+)
+
+if ((${#STATIC_ARGS[@]})); then
+  PY_ARGS+=("${STATIC_ARGS[@]}")
+fi
+if ((${#TASKS_ARGS[@]})); then
+  PY_ARGS+=("${TASKS_ARGS[@]}")
+fi
+if ((${#CREATIVITY_ARGS[@]})); then
+  PY_ARGS+=("${CREATIVITY_ARGS[@]}")
+fi
+if ((${#LM_STUDIO_ARGS[@]})); then
+  PY_ARGS+=("${LM_STUDIO_ARGS[@]}")
+fi
+if ((${#EVAL_CACHE_ARGS[@]})); then
+  PY_ARGS+=("${EVAL_CACHE_ARGS[@]}")
+fi
+if ((${#RUN_NAMESPACE_ARGS[@]})); then
+  PY_ARGS+=("${RUN_NAMESPACE_ARGS[@]}")
+fi
+if ((${#OUTPUT_SUFFIX_ARGS[@]})); then
+  PY_ARGS+=("${OUTPUT_SUFFIX_ARGS[@]}")
+fi
+if ((${#CACHE_NAMESPACE_ARGS[@]})); then
+  PY_ARGS+=("${CACHE_NAMESPACE_ARGS[@]}")
+fi
+
+python "${PY_ARGS[@]}"
