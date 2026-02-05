@@ -21,3 +21,6 @@ debug.ipynb
 # local caches / generated artifacts
 \# optional cache dir/
 cache/
+
+# local binaries / installers
+*.dmg
