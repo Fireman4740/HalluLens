@@ -8,6 +8,8 @@ data/wiki_data/enwiki-2024.titles.txt
 data/wiki_data/.cache/*
 data/nonexistent_refusal
 scripts/data_download-full.sh
+output/
+output/*
 
 __pycache__/
 data/longwiki

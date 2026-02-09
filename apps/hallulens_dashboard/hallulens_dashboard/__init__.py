@@ -1,0 +1,2 @@
+"""HalluLens dashboard package."""
+
