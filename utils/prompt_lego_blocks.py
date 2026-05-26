@@ -223,6 +223,15 @@ TASK_CONSTRAINTS: Dict[TaskName, str] = {
         "- Include exactly 2 short direct quotes in double quotes (attributed to named sources).\n"
         "- End with 1 forward-looking perspective sentence.\n"
     ),
+    TaskName.LESSON_PLAN: (
+        "Use-case: teacher lesson plan for a class.\n"
+        "Format requirements:\n"
+        "- Grade level specified at top.\n"
+        "- Learning objectives: exactly 3.\n"
+        "- Materials needed: list format.\n"
+        "- 1 activity with time allocations.\n"
+        "- Assessment criteria section.\n"
+    ),
 
     TaskName.FAQ_HELP_PAGE: (
         "Use-case: help/FAQ page for a public-facing educational site.\n"
@@ -241,15 +250,7 @@ TASK_CONSTRAINTS: Dict[TaskName, str] = {
         "- Mini-quiz: exactly 6 questions (4 multiple-choice + 2 short-answer).\n"
         "- Answer key at the end.\n"
     ),
-    TaskName.LESSON_PLAN: (
-        "Use-case: teacher lesson plan for a class.\n"
-        "Format requirements:\n"
-        "- Grade level specified at top.\n"
-        "- Learning objectives: exactly 3.\n"
-        "- Materials needed: list format.\n"
-        "- 1 activity with time allocations.\n"
-        "- Assessment criteria section.\n"
-    ),
+    
     TaskName.PRESS_RELEASE: (
         "Use-case: official press release announcement.\n"
         "Format requirements:\n"

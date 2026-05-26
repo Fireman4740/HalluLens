@@ -123,12 +123,14 @@ def read_generation(generation_path: Path, fallback_length_words: Any) -> pd.Dat
                     continue
 
                 creativity_level = obj.get("creativity_level") or obj.get("creativity") or "NA"
+                kappa_level = obj.get("kappa_level") or "NA"
                 rows.append(
                     {
                         "prompt": obj.get("prompt", ""),
                         "title": obj.get("title", ""),
                         "task": obj.get("task", "NA"),
                         "creativity_level": creativity_level,
+                        "kappa_level": kappa_level,
                         "generation": obj.get("generation", ""),
                         "length_words": obj.get("length_words", fallback_length_words),
                     }
@@ -144,6 +146,7 @@ def read_generation(generation_path: Path, fallback_length_words: Any) -> pd.Dat
     df["generation"] = df["generation"].fillna("")
     df["task"] = df["task"].fillna("NA")
     df["creativity_level"] = df["creativity_level"].fillna("NA")
+    df["kappa_level"] = df["kappa_level"].fillna("NA")
     df["prompt_clean"] = df["prompt"].map(normalize_text)
     df["prompt_id"] = df["prompt_clean"].map(hash_text)
     df["prompt_length_words"] = df["prompt_clean"].str.split().str.len()
@@ -227,7 +230,7 @@ def load_prompt_dataset(selected_roots: tuple[str, ...]) -> pd.DataFrame:
         return pd.DataFrame()
 
     df = pd.concat(frames, ignore_index=True)
-    for col in ["task", "model_name", "creativity_level", "root_name"]:
+    for col in ["task", "model_name", "creativity_level", "kappa_level", "root_name"]:
         if col in df.columns:
             df[col] = df[col].fillna("NA")
     return df

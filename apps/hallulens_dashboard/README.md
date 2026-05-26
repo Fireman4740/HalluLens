@@ -11,10 +11,17 @@ This app centralizes interactive analysis of hallucination metrics and creativit
   - `hallucination_rate`
   - `response_length_words`
   - `response_length_tokens` (tiktoken when available, fallback approximation otherwise)
-- Two dashboard pages:
+- Dashboard pages:
   - `Impact Hallucinations`: parameter impact exploration (`line`, `points`, `box`, `violin`, Spearman, advanced analysis, export)
   - `Creativity Prism`: strict scored-mode analysis based on `creativity.jsonl`
+  - `Responses & Claims`: deep exploration of LLM responses, extracted claims, and verification outcomes
   - `LLM Export`: consolidated, LLM-ready report text combining insights from both pages with project context
+- Responses & Claims page capabilities:
+  - claim-level filtering by dataset/model/task/creativity/temperature/length/status
+  - prompt drill-down (prompt text, generated response, per-claim verification table)
+  - global risk views (status distributions, support-rate heatmap, risky prompts)
+  - verification diagnostics (precision/recall/f1 scatter + grouped summary table)
+  - CSV export of filtered claim rows
 - Creativity page capabilities:
   - run-level coverage table (`missing`, `partial`, `complete`)
   - TTCT and TTCW (TTWT alias supported) parsing and merge with hallucination metrics
@@ -33,6 +40,7 @@ The app is split into modules under `apps/hallulens_dashboard/hallulens_dashboar
 - `app_main.py`: Streamlit orchestration (page layout + section wiring)
 - `data_loading.py`: run discovery + prompt-level dataset construction
 - `creativity_loading.py`: creativity JSONL parsing + strict scored dataset merge + coverage table
+- `claims_loading.py`: claim-level dataset build (output.csv + generation merge) + prompt summaries
 - `plotting.py`: Plotly figure builders (line/box/violin)
 - `creativity_plotting.py`: Plotly builders for creativity scatter/heatmap/boxplot/GLM forest
 - `analytics.py`: impact summary + detailed Spearman analysis
@@ -47,7 +55,10 @@ Entry point:
 ## Run
 
 ```bash
+
 pip install -r apps/hallulens_dashboard/requirements.txt
+
+conda activate crea 
 streamlit run apps/hallulens_dashboard/app.py
 ```
 

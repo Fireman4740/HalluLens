@@ -9,6 +9,14 @@ CREATIVITY_COLOR_MAP = {
     "NA": "#7f7f7f",
 }
 
+KAPPA_ORDER = ["LOW", "HIGH"]
+
+KAPPA_COLOR_MAP = {
+    "LOW": "#9467bd",
+    "HIGH": "#d62728",
+    "NA": "#7f7f7f",
+}
+
 DEFAULT_CHART_TYPE = "line"
 DEFAULT_Y_AXIS = "hallucination_rate"
 DEFAULT_X_AXIS = "length_words"
@@ -21,6 +29,8 @@ DEFAULT_SERIES_B = "model_name"
 PAGE_IMPACT = "Impact Hallucinations"
 PAGE_CREATIVITY = "Creativity Prism"
 PAGE_LLM_EXPORT = "LLM Export"
+PAGE_CLAIMS_EXPLORER = "Responses & Claims"
+PAGE_EVALUATOR_AGREEMENT = "Evaluator Agreement"
 
 CREATIVITY_SCORE_OPTIONS = [
     "creativity_composite",

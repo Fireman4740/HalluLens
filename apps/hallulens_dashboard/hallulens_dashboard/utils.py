@@ -54,7 +54,7 @@ def sorted_unique(series: pd.Series) -> list[Any]:
 
 
 def apply_multiselect_filter(df: pd.DataFrame, column: str, selected: list[Any]) -> pd.DataFrame:
-    if not selected:
+    if not selected or column not in df.columns:
         return df
     return df[df[column].isin(selected)]
 
@@ -65,4 +65,3 @@ def option_index(options: list[Any], preferred: Any, fallback: int = 0) -> int:
     if not options:
         return 0
     return min(max(fallback, 0), len(options) - 1)
-
